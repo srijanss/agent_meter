@@ -30,7 +30,15 @@ fn redact_word(word: &str) -> String {
     }
     let core_end = prefix_len + core.len();
     let secret_start = match core.split_once('=') {
-        Some((key, _)) if is_secret_key(key) => Some(prefix_len + key.len() + 1),
+        Some((key, value)) if is_secret_key(key) => {
+            let unquoted = value.trim_start_matches(is_wrapper);
+            if unquoted.is_empty() {
+                None
+            } else {
+                // Keep the opening quote so the closing one stays balanced.
+                Some(prefix_len + key.len() + 1 + (value.len() - unquoted.len()))
+            }
+        }
         _ if is_email(core) || is_uuid(core) || core.starts_with("sk-") => Some(prefix_len),
         _ => None,
     };
