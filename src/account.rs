@@ -316,18 +316,16 @@ fn mark_active_inner(
         let original = std::fs::metadata(path)?;
         #[cfg(unix)]
         {
-            use std::os::unix::fs::{MetadataExt, PermissionsExt};
-            // Keep the shared config's group; where that is not allowed, drop
-            // group/other bits rather than expose it to the creator's group.
-            let mut permissions = original.permissions();
+            use std::os::unix::fs::MetadataExt;
+            // The replacement must keep the shared config's group. If that is not
+            // possible, fail rather than silently lock the config's other users
+            // out (or expose it to the creator's group); the original is kept.
             let gid = original.gid();
-            if file.metadata()?.gid() != gid
-                && (fault == Some(WriteStage::GroupChange)
-                    || std::os::unix::fs::fchown(&file, None, Some(gid)).is_err())
-            {
-                permissions = std::fs::Permissions::from_mode(permissions.mode() & 0o700);
+            if file.metadata()?.gid() != gid {
+                inject(WriteStage::GroupChange)?;
+                std::os::unix::fs::fchown(&file, None, Some(gid))?;
             }
-            file.set_permissions(permissions)?;
+            file.set_permissions(original.permissions())?;
         }
         #[cfg(not(unix))]
         file.set_permissions(original.permissions())?;
