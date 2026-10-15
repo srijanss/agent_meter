@@ -184,13 +184,20 @@ fn open_lock(
             }
             Err(_) => return Err(fail()),
         };
-        if !file.metadata().map_err(|_| fail())?.file_type().is_file() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let meta = file.metadata().map_err(|_| fail())?;
+        // A lock with other links is someone else's file in disguise: O_NOFOLLOW
+        // does not stop hard links, and changing its mode would change theirs.
+        if !meta.file_type().is_file() || meta.nlink() != 1 {
             return Err(fail());
         }
-        let result = file.set_permissions(config_permissions);
-        // An existing lock owned by someone else cannot be changed; it still works.
-        if created {
-            result.map_err(|_| fail())?;
+        let wanted = config_permissions.mode() & 0o7777;
+        if meta.permissions().mode() & 0o7777 != wanted {
+            let result = file.set_permissions(config_permissions);
+            // An existing lock owned by someone else cannot be changed; it still works.
+            if created {
+                result.map_err(|_| fail())?;
+            }
         }
         Ok(file)
     }
