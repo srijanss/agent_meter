@@ -233,16 +233,24 @@ fn mark_active_inner(
         .and_then(toml::Value::as_str)
         .ok_or_else(|| fail("no such account"))?
         .to_string();
+    let mut changed = false;
     for (key, account) in accounts.iter_mut() {
         let Some(table) = account.as_table_mut() else { continue };
         if table.get("provider").and_then(toml::Value::as_str) != Some(provider.as_str()) {
             continue;
         }
         if key == name {
-            table.insert("active".into(), toml::Value::Boolean(true));
-        } else {
-            table.remove("active");
+            if table.get("active").and_then(toml::Value::as_bool) != Some(true) {
+                table.insert("active".into(), toml::Value::Boolean(true));
+                changed = true;
+            }
+        } else if table.remove("active").is_some() {
+            changed = true;
         }
+    }
+    if !changed {
+        // Already the sole active account: nothing to write.
+        return Ok(());
     }
     let out = toml::to_string(&doc).map_err(|_| fail("cannot serialize config"))?;
     let file_name = path.file_name().ok_or_else(|| fail("config path has no file name"))?;
