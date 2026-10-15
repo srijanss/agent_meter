@@ -19,6 +19,8 @@ pub struct Account {
     pub provider: Provider,
     /// The CLI's config directory (explicit, or `~/.claude` / `~/.codex`).
     pub home: PathBuf,
+    /// The account marked in use for its provider (a config mark only).
+    pub active: bool,
 }
 
 impl Account {
@@ -54,6 +56,7 @@ impl std::error::Error for ConfigError {}
 struct RawAccount {
     provider: Provider,
     home: Option<String>,
+    active: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -90,7 +93,56 @@ pub fn parse_accounts(toml_text: &str, user_home: &Path) -> Result<Vec<Account>,
                 Provider::Codex => ".codex",
             }),
         };
-        accounts.push(Account { name, provider: account.provider, home });
+        accounts.push(Account {
+            name,
+            provider: account.provider,
+            home,
+            active: account.active.unwrap_or(false),
+        });
     }
     Ok(accounts)
+}
+
+/// Marks `name` active for its provider in the config file at `path`, clearing
+/// the mark from that provider's other accounts. Writes only this config file,
+/// atomically (temp file + rename); never touches credentials or CLI logins.
+pub fn mark_active(path: &Path, name: &str) -> Result<(), ConfigError> {
+    let fail = |msg: &str| ConfigError(msg.into());
+    let text = std::fs::read_to_string(path).map_err(|_| fail("cannot read config"))?;
+    let mut doc: toml::Table = text.parse().map_err(|_| fail("config is not valid TOML"))?;
+    let accounts = doc
+        .get_mut("accounts")
+        .and_then(toml::Value::as_table_mut)
+        .ok_or_else(|| fail("config has no accounts"))?;
+    let provider = accounts
+        .get(name)
+        .and_then(|a| a.get("provider"))
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| fail("no such account"))?
+        .to_string();
+    for (key, account) in accounts.iter_mut() {
+        let Some(table) = account.as_table_mut() else { continue };
+        if table.get("provider").and_then(toml::Value::as_str) != Some(provider.as_str()) {
+            continue;
+        }
+        if key == name {
+            table.insert("active".into(), toml::Value::Boolean(true));
+        } else {
+            table.remove("active");
+        }
+    }
+    let out = toml::to_string(&doc).map_err(|_| fail("cannot serialize config"))?;
+    let file_name = path.file_name().ok_or_else(|| fail("config path has no file name"))?;
+    let tmp = path.with_file_name(format!(".{}.tmp", file_name.to_string_lossy()));
+    let write = || -> std::io::Result<()> {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(out.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&tmp, path)
+    };
+    write().map_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+        fail("cannot write config")
+    })
 }
