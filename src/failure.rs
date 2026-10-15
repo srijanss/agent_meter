@@ -36,7 +36,10 @@ pub fn collect_all(accounts: Vec<(String, Collect)>) -> Vec<(String, AccountOutc
                 Err(payload) => {
                     // The payload is arbitrary collector-owned data; its destructor
                     // may panic too, which must not escape this boundary.
-                    let _ = catch_unwind(AssertUnwindSafe(move || drop(payload)));
+                    if let Err(nested) = catch_unwind(AssertUnwindSafe(move || drop(payload))) {
+                        // Dropping it could panic again; leaking is the safe choice.
+                        std::mem::forget(nested);
+                    }
                     AccountOutcome::Failed(CollectorError::Internal)
                 }
             };
