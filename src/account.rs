@@ -147,9 +147,9 @@ fn open_lock(
     let fail = || ConfigError("cannot lock config".into());
     // The lock gets the config's access, never broader, so every user who may
     // rewrite a shared config can also take its lock.
-    let config_permissions = std::fs::metadata(config)
-        .map_err(|_| ConfigError("cannot read config".into()))?
-        .permissions();
+    let config_meta =
+        std::fs::metadata(config).map_err(|_| ConfigError("cannot read config".into()))?;
+    let config_permissions = config_meta.permissions();
     if let Some(hook) = before_open {
         hook();
     }
@@ -191,9 +191,19 @@ fn open_lock(
         if !meta.file_type().is_file() || meta.nlink() != 1 {
             return Err(fail());
         }
-        let wanted = config_permissions.mode() & 0o7777;
-        if meta.permissions().mode() & 0o7777 != wanted {
-            let result = file.set_permissions(config_permissions);
+        let mut wanted = config_permissions.mode() & 0o7777;
+        let mut permissions = config_permissions;
+        if created && meta.gid() != config_meta.gid() {
+            // Join the config's group so its other writers can take the lock; if
+            // that is not allowed, never leave access to the creator's own group.
+            let joined = std::os::unix::fs::fchown(&file, None, Some(config_meta.gid())).is_ok();
+            if !joined {
+                wanted &= 0o700;
+                permissions = std::fs::Permissions::from_mode(wanted);
+            }
+        }
+        if created || meta.permissions().mode() & 0o7777 != wanted {
+            let result = file.set_permissions(permissions);
             // An existing lock owned by someone else cannot be changed; it still works.
             if created {
                 result.map_err(|_| fail())?;
