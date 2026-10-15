@@ -80,9 +80,10 @@ pub fn parse_accounts(toml_text: &str, user_home: &Path) -> Result<Vec<Account>,
         let home = match account.home {
             Some(home) if is_clean(&home) => PathBuf::from(home),
             Some(_) => {
-                return Err(ConfigError(format!(
-                    "account `{name}` home is blank or has control characters"
-                )))
+                // The name is config-supplied and may itself be sensitive.
+                return Err(ConfigError(
+                    "an account home is blank or has control characters".into(),
+                ));
             }
             None => user_home.join(match account.provider {
                 Provider::Claude => ".claude",
