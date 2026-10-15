@@ -50,3 +50,32 @@ fn parses_the_spec_example_snapshot() {
     assert_eq!(bonus.expires_at, Some(Utc.with_ymd_and_hms(2026, 11, 3, 0, 0, 0).unwrap()));
     assert_eq!(bonus.source, Source::ProviderReported);
 }
+
+#[test]
+fn keeps_unknown_values_distinct_from_zero_and_normalizes_offsets() {
+    let json = r#"{
+      "schema_version": 1,
+      "provider": "claude",
+      "profile_id": "p",
+      "collected_at": "2026-10-14T10:00:00+10:00",
+      "source": "unknown",
+      "health": "unsupported",
+      "windows": [
+        { "id": "session", "label": "Session", "used_percent": 0.0,
+          "resets_at": null, "source": "provider_reported" },
+        { "id": "weekly", "label": "Weekly", "used_percent": null,
+          "source": "unknown" }
+      ],
+      "bonus_resets": { "remaining": 0, "expires_at": null, "source": "provider_reported" }
+    }"#;
+
+    let snapshot = parse_snapshot(json).expect("parses");
+
+    assert_eq!(snapshot.plan_label, None);
+    assert_eq!(snapshot.health, Health::Unsupported);
+    assert_eq!(snapshot.collected_at, Utc.with_ymd_and_hms(2026, 10, 14, 0, 0, 0).unwrap());
+    assert_eq!(snapshot.windows[0].used_percent, Some(0.0));
+    assert_eq!(snapshot.windows[0].resets_at, None);
+    assert_eq!(snapshot.windows[1].used_percent, None);
+    assert_eq!(snapshot.bonus_resets.unwrap().remaining, Some(0));
+}
