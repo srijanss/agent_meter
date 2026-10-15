@@ -36,24 +36,24 @@ fn a_new_lock_joins_the_configs_group_not_the_creators_default() {
 
 #[test]
 fn a_lock_that_cannot_join_the_configs_group_drops_group_and_other_access() {
-    // Without privilege a gid we are not in cannot be assigned; the lock must
-    // then not stay group-accessible to the creator's unrelated default group.
-    let groups = id("-G");
-    let Some(foreign) = (60000u32..60100).find(|g| !groups.contains(g)) else { return };
+    use agent_meter::account::{mark_active_failing_at, WriteStage};
+    let primary = id("-g")[0];
+    let Some(other) = id("-G").into_iter().find(|g| *g != primary) else { return };
     let dir = std::env::temp_dir().join(format!("agent_meter_lockgrp2_{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     let path = dir.join("shared.toml");
     fs::write(&path, "[accounts.a]\nprovider = \"claude\"\n").unwrap();
-    if chown(&path, None, Some(foreign)).is_err() {
-        let _ = fs::remove_dir_all(&dir);
-        return; // cannot arrange a foreign group without privilege
-    }
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o660)).unwrap();
+    chown(&path, None, Some(other)).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
 
-    mark_active(&path, "a").expect("marks");
+    mark_active_failing_at(&path, "a", WriteStage::GroupChange).expect("marks");
+    let lock = dir.join(".shared.toml.lock");
+    let mode = fs::metadata(&lock).unwrap().permissions().mode();
+    assert_eq!(mode & 0o077, 0, "group/other bits kept for the wrong group");
 
-    let lock = fs::metadata(dir.join(".shared.toml.lock")).unwrap();
-    assert_eq!(lock.permissions().mode() & 0o070, 0, "group bits kept for the wrong group");
+    // Repeating the operation keeps the restriction.
+    mark_active_failing_at(&path, "a", WriteStage::GroupChange).expect("marks again");
+    assert_eq!(fs::metadata(&lock).unwrap().permissions().mode() & 0o077, 0);
     let _ = fs::remove_dir_all(&dir);
 }

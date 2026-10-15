@@ -121,6 +121,7 @@ pub fn mark_active_racing(path: &Path, name: &str, hook: &dyn Fn()) -> Result<()
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WriteStage {
     PermissionCopy,
+    GroupChange,
     Write,
     Sync,
     Rename,
@@ -143,6 +144,7 @@ fn open_lock(
     lock_path: &Path,
     config: &Path,
     before_open: Option<&dyn Fn()>,
+    group_change_fails: bool,
 ) -> Result<std::fs::File, ConfigError> {
     let fail = || ConfigError("cannot lock config".into());
     // The lock gets the config's access, never broader, so every user who may
@@ -196,7 +198,8 @@ fn open_lock(
         if meta.gid() != config_meta.gid() {
             // Join the config's group so its other writers can take the lock; if
             // that is not allowed, never leave access to the creator's own group.
-            let joined = std::os::unix::fs::fchown(&file, None, Some(config_meta.gid())).is_ok();
+            let joined = !group_change_fails
+                && std::os::unix::fs::fchown(&file, None, Some(config_meta.gid())).is_ok();
             if !joined {
                 wanted &= 0o700;
                 permissions = std::fs::Permissions::from_mode(wanted);
@@ -236,7 +239,7 @@ fn mark_active_inner(
     // crash never leaves a stale lock behind.
     let lock_name = path.file_name().ok_or_else(|| fail("config path has no file name"))?;
     let lock_path = path.with_file_name(format!(".{}.lock", lock_name.to_string_lossy()));
-    let lock = open_lock(&lock_path, path, before_lock_open)?;
+    let lock = open_lock(&lock_path, path, before_lock_open, fault == Some(WriteStage::GroupChange))?;
     lock.lock().map_err(|_| fail("cannot lock config"))?;
     let text = std::fs::read_to_string(path).map_err(|_| fail("cannot read config"))?;
     let mut doc: toml::Table = text.parse().map_err(|_| fail("config is not valid TOML"))?;
@@ -319,7 +322,8 @@ fn mark_active_inner(
             let mut permissions = original.permissions();
             let gid = original.gid();
             if file.metadata()?.gid() != gid
-                && std::os::unix::fs::fchown(&file, None, Some(gid)).is_err()
+                && (fault == Some(WriteStage::GroupChange)
+                    || std::os::unix::fs::fchown(&file, None, Some(gid)).is_err())
             {
                 permissions = std::fs::Permissions::from_mode(permissions.mode() & 0o700);
             }
