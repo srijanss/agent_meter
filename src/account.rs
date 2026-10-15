@@ -141,14 +141,35 @@ fn mark_active_inner(
     // crash never leaves a stale lock behind.
     let lock_name = path.file_name().ok_or_else(|| fail("config path has no file name"))?;
     let lock_path = path.with_file_name(format!(".{}.lock", lock_name.to_string_lossy()));
+    // Only a regular file may serve as the lock: a planted FIFO would block the
+    // open and a symlink would redirect it. Re-checked after opening to close
+    // the window between this check and the open.
+    let is_regular = |m: &std::fs::Metadata| m.file_type().is_file();
+    if let Ok(meta) = std::fs::symlink_metadata(&lock_path) {
+        if !is_regular(&meta) {
+            return Err(fail("cannot lock config"));
+        }
+    }
     let mut lock_options = std::fs::OpenOptions::new();
-    lock_options.write(true).create(true).truncate(false);
+    lock_options.read(true).write(true).create(true).truncate(false);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         lock_options.mode(0o600);
     }
     let lock = lock_options.open(&lock_path).map_err(|_| fail("cannot lock config"))?;
+    let opened = lock.metadata().map_err(|_| fail("cannot lock config"))?;
+    let on_disk = std::fs::symlink_metadata(&lock_path).map_err(|_| fail("cannot lock config"))?;
+    if !is_regular(&opened) || !is_regular(&on_disk) {
+        return Err(fail("cannot lock config"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if (opened.dev(), opened.ino()) != (on_disk.dev(), on_disk.ino()) {
+            return Err(fail("cannot lock config"));
+        }
+    }
     lock.lock().map_err(|_| fail("cannot lock config"))?;
     let text = std::fs::read_to_string(path).map_err(|_| fail("cannot read config"))?;
     let mut doc: toml::Table = text.parse().map_err(|_| fail("config is not valid TOML"))?;
