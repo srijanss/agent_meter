@@ -155,19 +155,17 @@ impl CommandRunner for SystemRunner {
         let deadline = now
             .checked_add(limits.timeout)
             .unwrap_or_else(|| now + Duration::from_secs(100 * 365 * 24 * 3600));
-        let bytes = loop {
-            let wait = deadline.saturating_duration_since(Instant::now());
-            match rx.recv_timeout(wait.min(Duration::from_millis(20))) {
-                Ok(Ok(buf)) => break buf,
-                Ok(Err(error)) => {
-                    terminate(&mut child);
-                    return Err(error);
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
-                Err(_) => {
-                    terminate(&mut child);
-                    return Err(CollectorError::Unavailable);
-                }
+        // A reader result wakes this immediately; otherwise it sleeps to the deadline.
+        let wait = deadline.saturating_duration_since(Instant::now());
+        let bytes = match rx.recv_timeout(wait) {
+            Ok(Ok(buf)) => buf,
+            Ok(Err(error)) => {
+                terminate(&mut child);
+                return Err(error);
+            }
+            Err(_) => {
+                terminate(&mut child);
+                return Err(CollectorError::Unavailable);
             }
         };
         if bytes.len() > cap {
