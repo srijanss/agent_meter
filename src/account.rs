@@ -145,11 +145,11 @@ fn mark_active_inner(
     // open and a symlink would redirect it. Re-checked after opening to close
     // the window between this check and the open.
     let is_regular = |m: &std::fs::Metadata| m.file_type().is_file();
-    if let Ok(meta) = std::fs::symlink_metadata(&lock_path) {
-        if !is_regular(&meta) {
-            return Err(fail("cannot lock config"));
-        }
-    }
+    let lock_existed = match std::fs::symlink_metadata(&lock_path) {
+        Ok(meta) if !is_regular(&meta) => return Err(fail("cannot lock config")),
+        Ok(_) => true,
+        Err(_) => false,
+    };
     let mut lock_options = std::fs::OpenOptions::new();
     lock_options.read(true).write(true).create(true).truncate(false);
     #[cfg(unix)]
@@ -158,6 +158,14 @@ fn mark_active_inner(
         lock_options.mode(0o600);
     }
     let lock = lock_options.open(&lock_path).map_err(|_| fail("cannot lock config"))?;
+    if !lock_existed {
+        // Same access as the config (never broader), so every user who may
+        // rewrite a shared config can also take its lock.
+        let config_permissions = std::fs::metadata(path)
+            .map_err(|_| fail("cannot read config"))?
+            .permissions();
+        lock.set_permissions(config_permissions).map_err(|_| fail("cannot lock config"))?;
+    }
     let opened = lock.metadata().map_err(|_| fail("cannot lock config"))?;
     let on_disk = std::fs::symlink_metadata(&lock_path).map_err(|_| fail("cannot lock config"))?;
     if !is_regular(&opened) || !is_regular(&on_disk) {
