@@ -94,7 +94,11 @@ fn redact_json_pairs(line: &str) -> String {
                 let value_len = v[1..].find('"').unwrap_or(v.len() - 1);
                 out.push_str(&line[line.len() - rest.len()..value_start]);
                 out.push_str(MARK);
-                rest = &line[value_start + value_len..];
+                // Consume the closing quote too so it is not re-read as the
+                // opening quote of the next key.
+                let value_end = (value_start + value_len + 1).min(line.len());
+                out.push_str(&line[value_start + value_len..value_end]);
+                rest = &line[value_end..];
             }
             _ => {
                 let consumed = open + 1 + close + 1;
