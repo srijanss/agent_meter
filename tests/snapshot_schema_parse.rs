@@ -79,3 +79,25 @@ fn keeps_unknown_values_distinct_from_zero_and_normalizes_offsets() {
     assert_eq!(snapshot.windows[1].used_percent, None);
     assert_eq!(snapshot.bonus_resets.unwrap().remaining, Some(0));
 }
+
+#[test]
+fn rejects_malformed_and_incomplete_snapshots() {
+    let valid = SPEC_EXAMPLE;
+    let cases: Vec<(&str, String)> = vec![
+        ("malformed json", "{ not json".to_string()),
+        ("invalid timestamp", valid.replace("2026-10-14T00:00:00Z", "yesterday")),
+        ("invalid nested timestamp", valid.replace("2026-10-18T00:00:00Z", "soon")),
+        ("unknown source", valid.replacen("provider_reported", "guessed", 1)),
+        ("unknown health", valid.replace("\"health\": \"ok\"", "\"health\": \"on_fire\"")),
+        ("missing provider", valid.replace("\"provider\": \"codex\",", "")),
+        ("missing windows", {
+            let start = valid.find("\"windows\"").unwrap();
+            let end = valid.find("\"bonus_resets\"").unwrap();
+            format!("{}{}", &valid[..start], &valid[end..])
+        }),
+    ];
+
+    for (name, json) in cases {
+        assert!(parse_snapshot(&json).is_err(), "{name} should be rejected");
+    }
+}
