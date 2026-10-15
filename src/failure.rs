@@ -33,7 +33,12 @@ pub fn collect_all(accounts: Vec<(String, Collect)>) -> Vec<(String, AccountOutc
             let outcome = match catch_unwind(AssertUnwindSafe(collect)) {
                 Ok(Ok(snapshot)) => AccountOutcome::Snapshot(snapshot),
                 Ok(Err(error)) => AccountOutcome::Failed(error),
-                Err(_) => AccountOutcome::Failed(CollectorError::Internal),
+                Err(payload) => {
+                    // The payload is arbitrary collector-owned data; its destructor
+                    // may panic too, which must not escape this boundary.
+                    let _ = catch_unwind(AssertUnwindSafe(move || drop(payload)));
+                    AccountOutcome::Failed(CollectorError::Internal)
+                }
             };
             (id, outcome)
         })
