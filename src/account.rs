@@ -193,7 +193,7 @@ fn open_lock(
         }
         let mut wanted = config_permissions.mode() & 0o7777;
         let mut permissions = config_permissions;
-        if created && meta.gid() != config_meta.gid() {
+        if meta.gid() != config_meta.gid() {
             // Join the config's group so its other writers can take the lock; if
             // that is not allowed, never leave access to the creator's own group.
             let joined = std::os::unix::fs::fchown(&file, None, Some(config_meta.gid())).is_ok();
