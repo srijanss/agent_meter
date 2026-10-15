@@ -115,11 +115,15 @@ impl CommandRunner for SystemRunner {
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             let mut buf = Vec::new();
-            let _ = stdout.take(cap as u64 + 1).read_to_end(&mut buf);
+            let _ = stdout.take((cap as u64).saturating_add(1)).read_to_end(&mut buf);
             let _ = tx.send(buf);
         });
 
-        let deadline = Instant::now() + limits.timeout;
+        // An unrepresentable timeout means "effectively never", not a panic.
+        let now = Instant::now();
+        let deadline = now
+            .checked_add(limits.timeout)
+            .unwrap_or_else(|| now + Duration::from_secs(100 * 365 * 24 * 3600));
         let bytes = loop {
             let wait = deadline.saturating_duration_since(Instant::now());
             match rx.recv_timeout(wait.min(Duration::from_millis(20))) {
