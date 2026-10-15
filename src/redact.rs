@@ -146,10 +146,23 @@ fn redact_word(word: &str) -> String {
 }
 
 fn is_secret_key(key: &str) -> bool {
-    let lowered = key.to_ascii_lowercase();
-    lowered
-        .split(|c: char| matches!(c, '_' | '-' | '.'))
-        .any(|word| SECRET_KEY_WORDS.contains(&word))
+    let mut word = String::new();
+    let mut prev_lower = false;
+    for c in key.chars() {
+        let separator = matches!(c, '_' | '-' | '.');
+        // A lower-to-upper step starts a new word (`accessToken`).
+        if separator || (prev_lower && c.is_uppercase()) {
+            if SECRET_KEY_WORDS.contains(&word.as_str()) {
+                return true;
+            }
+            word.clear();
+        }
+        if !separator {
+            word.extend(c.to_lowercase());
+        }
+        prev_lower = c.is_lowercase() || c.is_ascii_digit();
+    }
+    SECRET_KEY_WORDS.contains(&word.as_str())
 }
 
 fn is_email(s: &str) -> bool {
