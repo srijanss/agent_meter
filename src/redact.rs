@@ -21,20 +21,28 @@ fn redact_line(line: &str) -> String {
 }
 
 fn redact_word(word: &str) -> String {
-    let core = word.trim_matches(|c: char| matches!(c, '"' | '\'' | ',' | ';' | '(' | ')'));
+    let is_wrapper = |c: char| matches!(c, '"' | '\'' | ',' | ';' | '(' | ')');
+    let trimmed_start = word.trim_start_matches(is_wrapper);
+    let prefix_len = word.len() - trimmed_start.len();
+    let core = trimmed_start.trim_end_matches(is_wrapper);
     if core.is_empty() {
         return word.to_string();
     }
-    if let Some((key, _)) = core.split_once('=') {
-        let lowered = key.to_ascii_lowercase();
-        if SECRET_KEY_HINTS.iter().any(|hint| lowered.contains(hint)) {
-            return word.replacen(&core[key.len() + 1..], MARK, 1);
-        }
+    let core_end = prefix_len + core.len();
+    let secret_start = match core.split_once('=') {
+        Some((key, _)) if is_secret_key(key) => Some(prefix_len + key.len() + 1),
+        _ if is_email(core) || is_uuid(core) || core.starts_with("sk-") => Some(prefix_len),
+        _ => None,
+    };
+    match secret_start {
+        Some(start) => format!("{}{MARK}{}", &word[..start], &word[core_end..]),
+        None => word.to_string(),
     }
-    if is_email(core) || is_uuid(core) || core.starts_with("sk-") {
-        return word.replacen(core, MARK, 1);
-    }
-    word.to_string()
+}
+
+fn is_secret_key(key: &str) -> bool {
+    let lowered = key.to_ascii_lowercase();
+    SECRET_KEY_HINTS.iter().any(|hint| lowered.contains(hint))
 }
 
 fn is_email(s: &str) -> bool {
