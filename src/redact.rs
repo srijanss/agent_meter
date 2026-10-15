@@ -64,10 +64,16 @@ fn redact_assignments(line: &str) -> String {
         let Some(&first) = chars.get(i).filter(|c| !c.is_whitespace()) else { continue };
         let quote = matches!(first, '"' | '\'').then_some(first);
         let body_start = i + usize::from(quote.is_some());
+        let mut escaped = false;
         let body_end = chars[body_start..]
             .iter()
             .position(|&c| match quote {
-                Some(q) => c == q,
+                // A backslash escapes the next char, so `\"` never closes.
+                Some(q) => {
+                    let closes = !escaped && c == q;
+                    escaped = !escaped && c == '\\';
+                    closes
+                }
                 None => c.is_whitespace() || matches!(c, ',' | ';' | ')' | '"' | '\''),
             })
             .map_or(chars.len(), |n| body_start + n);
