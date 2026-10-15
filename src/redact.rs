@@ -77,13 +77,27 @@ fn redact_assignments(line: &str) -> String {
     out
 }
 
+/// Byte offset of the first `"` in `s` that is not escaped by a backslash.
+fn closing_quote(s: &str) -> Option<usize> {
+    let mut escaped = false;
+    for (i, c) in s.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            '"' => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Replaces the string value of every `"secret_key": "value"` pair.
 fn redact_json_pairs(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut rest = line;
     while let Some(open) = rest.find('"') {
         let after_open = &rest[open + 1..];
-        let Some(close) = after_open.find('"') else { break };
+        let Some(close) = closing_quote(after_open) else { break };
         let key = &after_open[..close];
         let tail = &after_open[close + 1..];
         let colon = tail.trim_start();
@@ -91,7 +105,7 @@ fn redact_json_pairs(line: &str) -> String {
         match value {
             Some(v) if is_secret_key(key) && v.starts_with('"') => {
                 let value_start = line.len() - v.len() + 1;
-                let value_len = v[1..].find('"').unwrap_or(v.len() - 1);
+                let value_len = closing_quote(&v[1..]).unwrap_or(v.len() - 1);
                 out.push_str(&line[line.len() - rest.len()..value_start]);
                 out.push_str(MARK);
                 // Consume the closing quote too so it is not re-read as the
