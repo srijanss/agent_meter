@@ -12,13 +12,15 @@ fn alive(pid: &str) -> bool {
 
 #[test]
 fn a_timed_out_command_takes_its_descendants_down_with_it() {
-    let dir = std::env::temp_dir().join(format!("agent_meter_pgrp_{}", std::process::id()));
+    // A quote in the path proves it is passed as data, never spliced into the script.
+    let dir = std::env::temp_dir().join(format!("agent_meter_pgrp_'_{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     let pidfile = dir.join("child.pid");
     // The descendant keeps the stdout pipe open and outlives its parent shell.
-    let script = format!("sleep 30 & echo $! > '{}'; wait", pidfile.display());
-    let spec = CommandSpec::new("sh", ["-c", script.as_str()]).unwrap();
+    let script = "sleep 30 & echo $! > \"$1\"; wait";
+    let path = pidfile.to_str().unwrap();
+    let spec = CommandSpec::new("sh", ["-c", script, "sh", path]).unwrap();
     let limits = Limits { timeout: Duration::from_millis(500), max_output: 4096 };
 
     let started = Instant::now();
