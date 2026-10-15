@@ -107,6 +107,34 @@ pub fn parse_accounts(toml_text: &str, user_home: &Path) -> Result<Vec<Account>,
 /// the mark from that provider's other accounts. Writes only this config file,
 /// atomically (temp file + rename); never touches credentials or CLI logins.
 pub fn mark_active(path: &Path, name: &str) -> Result<(), ConfigError> {
+    mark_active_inner(path, name, None)
+}
+
+/// A step of the atomic write that can be made to fail on purpose.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteStage {
+    PermissionCopy,
+    Write,
+    Sync,
+    Rename,
+}
+
+/// Test seam: `mark_active` with an I/O failure injected at `stage`.
+#[doc(hidden)]
+pub fn mark_active_failing_at(
+    path: &Path,
+    name: &str,
+    stage: WriteStage,
+) -> Result<(), ConfigError> {
+    mark_active_inner(path, name, Some(stage))
+}
+
+fn mark_active_inner(
+    path: &Path,
+    name: &str,
+    fault: Option<WriteStage>,
+) -> Result<(), ConfigError> {
     let fail = |msg: &str| ConfigError(msg.into());
     // Serializes the whole read-modify-write across threads and processes. The
     // OS drops the lock when the handle closes (or the process dies), so a
@@ -178,9 +206,20 @@ pub fn mark_active(path: &Path, name: &str) -> Result<(), ConfigError> {
     let (tmp, mut file) = created.ok_or_else(|| fail("cannot write config"))?;
     let mut write = || -> std::io::Result<()> {
         use std::io::Write;
+        let inject = |stage: WriteStage| {
+            if fault == Some(stage) {
+                Err(std::io::Error::other("injected fault"))
+            } else {
+                Ok(())
+            }
+        };
+        inject(WriteStage::PermissionCopy)?;
         file.set_permissions(std::fs::metadata(path)?.permissions())?;
+        inject(WriteStage::Write)?;
         file.write_all(out.as_bytes())?;
+        inject(WriteStage::Sync)?;
         file.sync_all()?;
+        inject(WriteStage::Rename)?;
         std::fs::rename(&tmp, path)
     };
     write().map_err(|_| {
