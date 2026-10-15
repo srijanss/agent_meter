@@ -4,3 +4,4 @@ pub mod snapshot;
 pub mod meter;
 pub mod countdown;
 pub mod display;
+pub mod freshness;
