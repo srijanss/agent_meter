@@ -133,32 +133,44 @@ pub fn mark_active(path: &Path, name: &str) -> Result<(), ConfigError> {
     }
     let out = toml::to_string(&doc).map_err(|_| fail("cannot serialize config"))?;
     let file_name = path.file_name().ok_or_else(|| fail("config path has no file name"))?;
-    // Unique per call, and created exclusively so a planted file or symlink
-    // at the temp path is an error rather than a redirected write.
+    // Created exclusively under a name unique to this call, so a planted file
+    // or symlink is skipped (never written through, never removed).
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let tmp = path.with_file_name(format!(
-        ".{}.{}.{}.tmp",
-        file_name.to_string_lossy(),
-        std::process::id(),
-        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    let write = || -> std::io::Result<()> {
-        use std::io::Write;
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            // Owner-only until the original's permissions are copied over.
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        // Owner-only until the original's permissions are copied over.
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut created = None;
+    for _ in 0..16 {
+        let tmp = path.with_file_name(format!(
+            ".{}.{}.{}.tmp",
+            file_name.to_string_lossy(),
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        match options.open(&tmp) {
+            Ok(file) => {
+                created = Some((tmp, file));
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return Err(fail("cannot write config")),
         }
-        let mut file = options.open(&tmp)?;
+    }
+    let (tmp, mut file) = created.ok_or_else(|| fail("cannot write config"))?;
+    let mut write = || -> std::io::Result<()> {
+        use std::io::Write;
         file.set_permissions(std::fs::metadata(path)?.permissions())?;
         file.write_all(out.as_bytes())?;
         file.sync_all()?;
         std::fs::rename(&tmp, path)
     };
     write().map_err(|_| {
+        // Only reached once this call created `tmp`, so it is ours to remove.
         let _ = std::fs::remove_file(&tmp);
         fail("cannot write config")
     })
