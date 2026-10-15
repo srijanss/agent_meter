@@ -144,7 +144,16 @@ pub fn mark_active(path: &Path, name: &str) -> Result<(), ConfigError> {
     ));
     let write = || -> std::io::Result<()> {
         use std::io::Write;
-        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            // Owner-only until the original's permissions are copied over.
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&tmp)?;
+        file.set_permissions(std::fs::metadata(path)?.permissions())?;
         file.write_all(out.as_bytes())?;
         file.sync_all()?;
         std::fs::rename(&tmp, path)
