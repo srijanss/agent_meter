@@ -6,8 +6,22 @@ use std::time::{Duration, Instant};
 use agent_meter::failure::CollectorError;
 use agent_meter::runner::{CommandRunner, CommandSpec, Limits, SystemRunner};
 
+/// Running, not merely present: a killed orphan stays a zombie until its
+/// reaper collects it, which says nothing about whether termination worked.
 fn alive(pid: &str) -> bool {
-    Command::new("kill").args(["-0", pid]).output().map(|o| o.status.success()).unwrap_or(false)
+    if let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) {
+        // State is the first field after the parenthesised command name.
+        let state = stat.rsplit_once(')').and_then(|(_, rest)| rest.trim_start().chars().next());
+        return !matches!(state, Some('Z') | Some('X'));
+    }
+    Command::new("ps")
+        .args(["-o", "stat=", "-p", pid])
+        .output()
+        .map(|o| {
+            let stat = String::from_utf8_lossy(&o.stdout);
+            o.status.success() && !stat.trim().is_empty() && !stat.trim_start().starts_with('Z')
+        })
+        .unwrap_or(false)
 }
 
 #[test]
