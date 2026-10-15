@@ -107,7 +107,13 @@ pub fn parse_accounts(toml_text: &str, user_home: &Path) -> Result<Vec<Account>,
 /// the mark from that provider's other accounts. Writes only this config file,
 /// atomically (temp file + rename); never touches credentials or CLI logins.
 pub fn mark_active(path: &Path, name: &str) -> Result<(), ConfigError> {
-    mark_active_inner(path, name, None)
+    mark_active_inner(path, name, None, None)
+}
+
+/// Test seam: runs `hook` in the window just before the lock file is opened.
+#[doc(hidden)]
+pub fn mark_active_racing(path: &Path, name: &str, hook: &dyn Fn()) -> Result<(), ConfigError> {
+    mark_active_inner(path, name, None, Some(hook))
 }
 
 /// A step of the atomic write that can be made to fail on purpose.
@@ -127,13 +133,85 @@ pub fn mark_active_failing_at(
     name: &str,
     stage: WriteStage,
 ) -> Result<(), ConfigError> {
-    mark_active_inner(path, name, Some(stage))
+    mark_active_inner(path, name, Some(stage), None)
+}
+
+/// Opens (creating if needed) the lock file without ever following a symlink.
+/// Creation is exclusive, so a new lock is told apart from an existing one at
+/// open time; permissions are changed only on the opened, verified regular file.
+fn open_lock(
+    lock_path: &Path,
+    config: &Path,
+    before_open: Option<&dyn Fn()>,
+) -> Result<std::fs::File, ConfigError> {
+    let fail = || ConfigError("cannot lock config".into());
+    // The lock gets the config's access, never broader, so every user who may
+    // rewrite a shared config can also take its lock.
+    let config_permissions = std::fs::metadata(config)
+        .map_err(|_| ConfigError("cannot read config".into()))?
+        .permissions();
+    if let Some(hook) = before_open {
+        hook();
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        #[cfg(target_os = "linux")]
+        const O_NOFOLLOW: i32 = if cfg!(any(target_arch = "aarch64", target_arch = "arm")) {
+            0o100000
+        } else {
+            0o400000
+        };
+        #[cfg(not(target_os = "linux"))]
+        const O_NOFOLLOW: i32 = 0x100;
+        #[cfg(target_os = "linux")]
+        const O_NONBLOCK: i32 = 0o4000;
+        #[cfg(not(target_os = "linux"))]
+        const O_NONBLOCK: i32 = 0x4;
+        let mut create = std::fs::OpenOptions::new();
+        create.read(true).write(true).create_new(true).mode(0o600).custom_flags(O_NOFOLLOW);
+        let (file, created) = match create.open(lock_path) {
+            Ok(file) => (file, true),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // O_NONBLOCK so a planted FIFO cannot hang the open.
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .custom_flags(O_NOFOLLOW | O_NONBLOCK)
+                    .open(lock_path)
+                    .map_err(|_| fail())?;
+                (file, false)
+            }
+            Err(_) => return Err(fail()),
+        };
+        if !file.metadata().map_err(|_| fail())?.file_type().is_file() {
+            return Err(fail());
+        }
+        let result = file.set_permissions(config_permissions);
+        // An existing lock owned by someone else cannot be changed; it still works.
+        if created {
+            result.map_err(|_| fail())?;
+        }
+        Ok(file)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = config_permissions;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_path)
+            .map_err(|_| fail())
+    }
 }
 
 fn mark_active_inner(
     path: &Path,
     name: &str,
     fault: Option<WriteStage>,
+    before_lock_open: Option<&dyn Fn()>,
 ) -> Result<(), ConfigError> {
     let fail = |msg: &str| ConfigError(msg.into());
     // Serializes the whole read-modify-write across threads and processes. The
@@ -141,43 +219,7 @@ fn mark_active_inner(
     // crash never leaves a stale lock behind.
     let lock_name = path.file_name().ok_or_else(|| fail("config path has no file name"))?;
     let lock_path = path.with_file_name(format!(".{}.lock", lock_name.to_string_lossy()));
-    // Only a regular file may serve as the lock: a planted FIFO would block the
-    // open and a symlink would redirect it. Re-checked after opening to close
-    // the window between this check and the open.
-    let is_regular = |m: &std::fs::Metadata| m.file_type().is_file();
-    let lock_existed = match std::fs::symlink_metadata(&lock_path) {
-        Ok(meta) if !is_regular(&meta) => return Err(fail("cannot lock config")),
-        Ok(_) => true,
-        Err(_) => false,
-    };
-    let mut lock_options = std::fs::OpenOptions::new();
-    lock_options.read(true).write(true).create(true).truncate(false);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        lock_options.mode(0o600);
-    }
-    let lock = lock_options.open(&lock_path).map_err(|_| fail("cannot lock config"))?;
-    if !lock_existed {
-        // Same access as the config (never broader), so every user who may
-        // rewrite a shared config can also take its lock.
-        let config_permissions = std::fs::metadata(path)
-            .map_err(|_| fail("cannot read config"))?
-            .permissions();
-        lock.set_permissions(config_permissions).map_err(|_| fail("cannot lock config"))?;
-    }
-    let opened = lock.metadata().map_err(|_| fail("cannot lock config"))?;
-    let on_disk = std::fs::symlink_metadata(&lock_path).map_err(|_| fail("cannot lock config"))?;
-    if !is_regular(&opened) || !is_regular(&on_disk) {
-        return Err(fail("cannot lock config"));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if (opened.dev(), opened.ino()) != (on_disk.dev(), on_disk.ino()) {
-            return Err(fail("cannot lock config"));
-        }
-    }
+    let lock = open_lock(&lock_path, path, before_lock_open)?;
     lock.lock().map_err(|_| fail("cannot lock config"))?;
     let text = std::fs::read_to_string(path).map_err(|_| fail("cannot read config"))?;
     let mut doc: toml::Table = text.parse().map_err(|_| fail("config is not valid TOML"))?;
