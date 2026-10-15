@@ -2,7 +2,9 @@
 //! parsed, logged, or shown (agents_plugin_spec.md privacy rules).
 
 const MARK: &str = "[redacted]";
-const SECRET_KEY_HINTS: [&str; 5] = ["token", "key", "secret", "password", "session"];
+/// Whole words (split on `_`, `-`, `.`) that mark a key as secret-bearing.
+const SECRET_KEY_WORDS: [&str; 9] =
+    ["token", "key", "apikey", "secret", "password", "passwd", "session", "sessionid", "credential"];
 const SECRET_HEADERS: [&str; 3] = ["authorization", "cookie", "set-cookie"];
 
 /// Returns `text` with emails, org/account UUIDs, API tokens, secret-looking
@@ -92,7 +94,9 @@ fn redact_word(word: &str) -> String {
 
 fn is_secret_key(key: &str) -> bool {
     let lowered = key.to_ascii_lowercase();
-    SECRET_KEY_HINTS.iter().any(|hint| lowered.contains(hint))
+    lowered
+        .split(|c: char| matches!(c, '_' | '-' | '.'))
+        .any(|word| SECRET_KEY_WORDS.contains(&word))
 }
 
 fn is_email(s: &str) -> bool {
