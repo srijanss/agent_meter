@@ -62,6 +62,20 @@ fn redact_assignments(line: &str) -> String {
             continue;
         }
         let Some(&first) = chars.get(i).filter(|c| !c.is_whitespace()) else { continue };
+        // `\"abc\"` inside a JSON string: the delimiters are escaped quotes, so
+        // keep them intact (and the surrounding JSON valid) around the marker.
+        if first == '\\' && chars.get(i + 1) == Some(&'"') {
+            let body_start = i + 2;
+            let body_end = (body_start..chars.len().saturating_sub(1))
+                .find(|&j| chars[j] == '\\' && chars[j + 1] == '"')
+                .unwrap_or(chars.len());
+            if body_end > body_start {
+                out.push_str("\\\"");
+                out.push_str(MARK);
+                i = body_end;
+                continue;
+            }
+        }
         let quote = matches!(first, '"' | '\'').then_some(first);
         let body_start = i + usize::from(quote.is_some());
         let mut escaped = false;
