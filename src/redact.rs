@@ -19,7 +19,7 @@ fn redact_line(line: &str) -> String {
             return format!("{}: {MARK}", name.trim());
         }
     }
-    let line = redact_json_pairs(line);
+    let line = redact_json_pairs(&redact_assignments(line));
     let is_delimiter = |c: char| c.is_whitespace() || matches!(c, '{' | '}' | '[' | ']' | ':');
     let mut out = String::with_capacity(line.len());
     let mut word_start = 0;
@@ -31,6 +31,49 @@ fn redact_line(line: &str) -> String {
         }
     }
     out.push_str(&redact_word(&line[word_start..]));
+    out
+}
+
+/// Replaces the whole value of every secret `name=value` assignment. Quoted
+/// values run to the matching quote; unquoted ones to whitespace or a
+/// separator, so inner punctuation never splits a secret.
+fn redact_assignments(line: &str) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let is_name_char = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-' | '.');
+    let mut out = String::with_capacity(line.len());
+    let mut i = 0;
+    while i < chars.len() {
+        out.push(chars[i]);
+        i += 1;
+        if chars[i - 1] != '=' {
+            continue;
+        }
+        let name_end = out.len() - 1;
+        let name_start = out[..name_end]
+            .char_indices()
+            .rev()
+            .take_while(|&(_, c)| is_name_char(c))
+            .last()
+            .map_or(name_end, |(at, _)| at);
+        if !is_secret_key(&out[name_start..name_end]) {
+            continue;
+        }
+        let Some(&first) = chars.get(i).filter(|c| !c.is_whitespace()) else { continue };
+        let quote = matches!(first, '"' | '\'').then_some(first);
+        let body_start = i + usize::from(quote.is_some());
+        let body_end = chars[body_start..]
+            .iter()
+            .position(|&c| match quote {
+                Some(q) => c == q,
+                None => c.is_whitespace() || matches!(c, ',' | ';' | ')' | '"' | '\''),
+            })
+            .map_or(chars.len(), |n| body_start + n);
+        if body_end > body_start {
+            out.extend(quote);
+            out.push_str(MARK);
+            i = body_end;
+        }
+    }
     out
 }
 
@@ -73,18 +116,10 @@ fn redact_word(word: &str) -> String {
         return word.to_string();
     }
     let core_end = prefix_len + core.len();
-    let secret_start = match core.split_once('=') {
-        Some((key, value)) if is_secret_key(key) => {
-            let unquoted = value.trim_start_matches(is_wrapper);
-            if unquoted.is_empty() {
-                None
-            } else {
-                // Keep the opening quote so the closing one stays balanced.
-                Some(prefix_len + key.len() + 1 + (value.len() - unquoted.len()))
-            }
-        }
-        _ if is_email(core) || is_uuid(core) || core.starts_with("sk-") => Some(prefix_len),
-        _ => None,
+    let secret_start = if is_email(core) || is_uuid(core) || core.starts_with("sk-") {
+        Some(prefix_len)
+    } else {
+        None
     };
     match secret_start {
         Some(start) => format!("{}{MARK}{}", &word[..start], &word[core_end..]),
