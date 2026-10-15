@@ -100,6 +100,28 @@ fn closing_quote(s: &str) -> Option<usize> {
     None
 }
 
+/// Byte length of the JSON array/object at the start of `s`, honoring strings
+/// and escapes. An unbalanced container extends to the end of `s`.
+fn container_len(s: &str) -> usize {
+    let (mut depth, mut in_string, mut escaped) = (0usize, false, false);
+    for (i, c) in s.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if in_string => escaped = true,
+            '"' => in_string = !in_string,
+            '{' | '[' if !in_string => depth += 1,
+            '}' | ']' if !in_string => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return i + c.len_utf8();
+                }
+            }
+            _ => {}
+        }
+    }
+    s.len()
+}
+
 /// Replaces the string value of every `"secret_key": "value"` pair.
 fn redact_json_pairs(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
@@ -123,7 +145,15 @@ fn redact_json_pairs(line: &str) -> String {
                 out.push_str(&line[value_start + value_len..value_end]);
                 rest = &line[value_end..];
             }
-            Some(v) if is_secret_key(key) && !v.is_empty() && !v.starts_with(['{', '[']) => {
+            Some(v) if is_secret_key(key) && v.starts_with(['{', '[']) => {
+                // Whole array/object value: redact it entirely, unbalanced
+                // input is redacted to its end rather than left visible.
+                let value_start = line.len() - v.len();
+                out.push_str(&line[line.len() - rest.len()..value_start]);
+                out.push_str(&format!("\"{MARK}\""));
+                rest = &line[value_start + container_len(v)..];
+            }
+            Some(v) if is_secret_key(key) && !v.is_empty() => {
                 // Bare scalar (number, bool, null): swap for a string marker so
                 // the JSON stays parseable.
                 let value_start = line.len() - v.len();
