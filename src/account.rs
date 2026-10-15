@@ -108,6 +108,20 @@ pub fn parse_accounts(toml_text: &str, user_home: &Path) -> Result<Vec<Account>,
 /// atomically (temp file + rename); never touches credentials or CLI logins.
 pub fn mark_active(path: &Path, name: &str) -> Result<(), ConfigError> {
     let fail = |msg: &str| ConfigError(msg.into());
+    // Serializes the whole read-modify-write across threads and processes. The
+    // OS drops the lock when the handle closes (or the process dies), so a
+    // crash never leaves a stale lock behind.
+    let lock_name = path.file_name().ok_or_else(|| fail("config path has no file name"))?;
+    let lock_path = path.with_file_name(format!(".{}.lock", lock_name.to_string_lossy()));
+    let mut lock_options = std::fs::OpenOptions::new();
+    lock_options.write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        lock_options.mode(0o600);
+    }
+    let lock = lock_options.open(&lock_path).map_err(|_| fail("cannot lock config"))?;
+    lock.lock().map_err(|_| fail("cannot lock config"))?;
     let text = std::fs::read_to_string(path).map_err(|_| fail("cannot read config"))?;
     let mut doc: toml::Table = text.parse().map_err(|_| fail("config is not valid TOML"))?;
     let accounts = doc

@@ -44,9 +44,13 @@ fn marking_moves_active_within_its_provider_only() {
     mark_active(&path, "claude-work").expect("marks");
 
     assert_eq!(active_names(&path), vec!["claude-work", "codex-main"]);
-    // Only the config file exists: no temp file left, nothing else written.
-    let entries: Vec<_> = fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
-    assert_eq!(entries.len(), 1, "{entries:?}");
+    // Only the config and its stable lock file exist: no temp file left.
+    let mut entries: Vec<_> = fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    entries.sort();
+    assert_eq!(entries, vec![".agents.toml.lock", "agents.toml"]);
     // Homes survive the rewrite.
     let text = fs::read_to_string(&path).unwrap();
     let work = parse_accounts(&text, Path::new("/home/u")).unwrap();
