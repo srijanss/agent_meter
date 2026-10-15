@@ -7,3 +7,4 @@ pub mod display;
 pub mod freshness;
 pub mod cache;
 pub mod failure;
+pub mod redact;
