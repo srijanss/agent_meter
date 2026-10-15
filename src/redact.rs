@@ -28,12 +28,12 @@ fn redact_line(line: &str) -> String {
     let mut word_start = 0;
     for (i, c) in line.char_indices() {
         if is_delimiter(c) {
-            out.push_str(&redact_word(&line[word_start..i]));
+            push_redacted_word(&mut out, &line[word_start..i]);
             out.push(c);
             word_start = i + c.len_utf8();
         }
     }
-    out.push_str(&redact_word(&line[word_start..]));
+    push_redacted_word(&mut out, &line[word_start..]);
     out
 }
 
@@ -188,23 +188,19 @@ fn redact_json_pairs(line: &str) -> String {
     out
 }
 
-fn redact_word(word: &str) -> String {
+/// Appends `word` to `out`, swapping a secret-looking core (email, UUID,
+/// `sk-` token) for the marker and keeping its wrapping punctuation.
+fn push_redacted_word(out: &mut String, word: &str) {
     let is_wrapper = |c: char| matches!(c, '"' | '\'' | ',' | ';' | '(' | ')');
     let trimmed_start = word.trim_start_matches(is_wrapper);
     let prefix_len = word.len() - trimmed_start.len();
     let core = trimmed_start.trim_end_matches(is_wrapper);
-    if core.is_empty() {
-        return word.to_string();
-    }
-    let core_end = prefix_len + core.len();
-    let secret_start = if is_email(core) || is_uuid(core) || core.starts_with("sk-") {
-        Some(prefix_len)
+    if !core.is_empty() && (is_email(core) || is_uuid(core) || core.starts_with("sk-")) {
+        out.push_str(&word[..prefix_len]);
+        out.push_str(MARK);
+        out.push_str(&word[prefix_len + core.len()..]);
     } else {
-        None
-    };
-    match secret_start {
-        Some(start) => format!("{}{MARK}{}", &word[..start], &word[core_end..]),
-        None => word.to_string(),
+        out.push_str(word);
     }
 }
 
