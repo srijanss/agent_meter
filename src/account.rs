@@ -310,7 +310,23 @@ fn mark_active_inner(
             }
         };
         inject(WriteStage::PermissionCopy)?;
-        file.set_permissions(std::fs::metadata(path)?.permissions())?;
+        let original = std::fs::metadata(path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            // Keep the shared config's group; where that is not allowed, drop
+            // group/other bits rather than expose it to the creator's group.
+            let mut permissions = original.permissions();
+            let gid = original.gid();
+            if file.metadata()?.gid() != gid
+                && std::os::unix::fs::fchown(&file, None, Some(gid)).is_err()
+            {
+                permissions = std::fs::Permissions::from_mode(permissions.mode() & 0o700);
+            }
+            file.set_permissions(permissions)?;
+        }
+        #[cfg(not(unix))]
+        file.set_permissions(original.permissions())?;
         inject(WriteStage::Write)?;
         file.write_all(out.as_bytes())?;
         inject(WriteStage::Sync)?;
