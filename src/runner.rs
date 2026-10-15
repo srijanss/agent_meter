@@ -3,7 +3,9 @@
 //! allow-listed per-account environment, a timeout and an output cap.
 
 use std::io::Read;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -97,6 +99,23 @@ pub fn read_capped<R: Read>(reader: R, cap: usize) -> Result<Vec<u8>, CollectorE
     Ok(buf)
 }
 
+/// Kills the child and every descendant in its process group, then reaps it.
+fn terminate(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        const SIGKILL: i32 = 9;
+        if let Ok(pid) = i32::try_from(child.id()) {
+            // SAFETY: plain syscall; a negative pid addresses the group we created.
+            unsafe { kill(-pid, SIGKILL) };
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Runs real processes.
 pub struct SystemRunner;
 
@@ -112,6 +131,9 @@ impl CommandRunner for SystemRunner {
         for (name, value) in &spec.env {
             command.env(name, value);
         }
+        // Its own process group, so the whole tree can be signalled on failure.
+        #[cfg(unix)]
+        command.process_group(0);
         let mut child = command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -138,21 +160,18 @@ impl CommandRunner for SystemRunner {
             match rx.recv_timeout(wait.min(Duration::from_millis(20))) {
                 Ok(Ok(buf)) => break buf,
                 Ok(Err(error)) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    terminate(&mut child);
                     return Err(error);
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
                 Err(_) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    terminate(&mut child);
                     return Err(CollectorError::Unavailable);
                 }
             }
         };
         if bytes.len() > cap {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate(&mut child);
             return Err(CollectorError::Malformed);
         }
         // Output closed; the child is exiting. Bound the wait as well.
@@ -161,8 +180,7 @@ impl CommandRunner for SystemRunner {
                 Ok(Some(status)) => break status,
                 Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
                 _ => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    terminate(&mut child);
                     return Err(CollectorError::Unavailable);
                 }
             }
