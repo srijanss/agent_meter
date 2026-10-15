@@ -86,6 +86,17 @@ pub trait CommandRunner {
     fn run(&self, spec: &CommandSpec, limits: &Limits) -> Result<Output, CollectorError>;
 }
 
+/// Reads at most `cap + 1` bytes (the extra byte lets callers detect overflow
+/// by length). A read failure is an error, never silently truncated output.
+pub fn read_capped<R: Read>(reader: R, cap: usize) -> Result<Vec<u8>, CollectorError> {
+    let mut buf = Vec::new();
+    reader
+        .take((cap as u64).saturating_add(1))
+        .read_to_end(&mut buf)
+        .map_err(|_| CollectorError::Unavailable)?;
+    Ok(buf)
+}
+
 /// Runs real processes.
 pub struct SystemRunner;
 
@@ -114,9 +125,7 @@ impl CommandRunner for SystemRunner {
         let cap = limits.max_output;
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = stdout.take((cap as u64).saturating_add(1)).read_to_end(&mut buf);
-            let _ = tx.send(buf);
+            let _ = tx.send(read_capped(stdout, cap));
         });
 
         // An unrepresentable timeout means "effectively never", not a panic.
@@ -127,7 +136,12 @@ impl CommandRunner for SystemRunner {
         let bytes = loop {
             let wait = deadline.saturating_duration_since(Instant::now());
             match rx.recv_timeout(wait.min(Duration::from_millis(20))) {
-                Ok(buf) => break buf,
+                Ok(Ok(buf)) => break buf,
+                Ok(Err(error)) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(error);
+                }
                 Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
                 Err(_) => {
                     let _ = child.kill();
