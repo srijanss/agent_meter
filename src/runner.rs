@@ -1,0 +1,155 @@
+//! Injectable command runner: collectors run external CLIs (claude, codex)
+//! through this seam with validated argument vectors (never shell strings), an
+//! allow-listed per-account environment, a timeout and an output cap.
+
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
+
+use crate::failure::CollectorError;
+
+/// Environment variables a collector may set for an account.
+const ALLOWED_ENV: [&str; 2] = ["CLAUDE_CONFIG_DIR", "CODEX_HOME"];
+/// Host variables a child still needs to locate itself and its config.
+const INHERITED_ENV: [&str; 4] = ["PATH", "HOME", "USER", "LANG"];
+
+/// A command to run. Construction validates it; the error carries no input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandSpec {
+    program: String,
+    args: Vec<String>,
+    env: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidCommand;
+
+impl CommandSpec {
+    /// `program` must be a bare executable name resolved through `PATH`.
+    pub fn new<I, S>(program: &str, args: I) -> Result<Self, InvalidCommand>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let bare = !program.is_empty()
+            && !program.starts_with('-')
+            && program.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+            && program != "."
+            && program != "..";
+        if !bare {
+            return Err(InvalidCommand);
+        }
+        let args: Vec<String> = args.into_iter().map(Into::into).collect();
+        if args.iter().any(|a| a.contains('\0')) {
+            return Err(InvalidCommand);
+        }
+        Ok(Self { program: program.to_string(), args, env: Vec::new() })
+    }
+
+    /// Adds an account environment variable (only `CLAUDE_CONFIG_DIR` or `CODEX_HOME`).
+    pub fn with_env(mut self, name: &str, value: &str) -> Result<Self, InvalidCommand> {
+        if !ALLOWED_ENV.contains(&name) || value.contains('\0') {
+            return Err(InvalidCommand);
+        }
+        self.env.retain(|(n, _)| n != name);
+        self.env.push((name.to_string(), value.to_string()));
+        Ok(self)
+    }
+
+    pub fn program(&self) -> &str {
+        &self.program
+    }
+
+    pub fn args(&self) -> &[String] {
+        &self.args
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    pub timeout: Duration,
+    pub max_output: usize,
+}
+
+/// Captured result of a command that ran to completion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Output {
+    pub stdout: String,
+    pub success: bool,
+}
+
+pub trait CommandRunner {
+    /// Failures: `Unavailable` (cannot start, timed out), `Malformed` (output
+    /// over the cap or not UTF-8). Child stderr is discarded, never surfaced.
+    fn run(&self, spec: &CommandSpec, limits: &Limits) -> Result<Output, CollectorError>;
+}
+
+/// Runs real processes.
+pub struct SystemRunner;
+
+impl CommandRunner for SystemRunner {
+    fn run(&self, spec: &CommandSpec, limits: &Limits) -> Result<Output, CollectorError> {
+        let mut command = Command::new(&spec.program);
+        command.args(&spec.args).env_clear();
+        for name in INHERITED_ENV {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        for (name, value) in &spec.env {
+            command.env(name, value);
+        }
+        let mut child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|_| CollectorError::Unavailable)?;
+        let stdout = child.stdout.take().ok_or(CollectorError::Internal)?;
+
+        // Read one byte past the cap so oversize output is detectable, and stop
+        // reading there so a flooding child cannot exhaust memory.
+        let cap = limits.max_output;
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stdout.take(cap as u64 + 1).read_to_end(&mut buf);
+            let _ = tx.send(buf);
+        });
+
+        let deadline = Instant::now() + limits.timeout;
+        let bytes = loop {
+            let wait = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(wait.min(Duration::from_millis(20))) {
+                Ok(buf) => break buf,
+                Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
+                Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(CollectorError::Unavailable);
+                }
+            }
+        };
+        if bytes.len() > cap {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(CollectorError::Malformed);
+        }
+        // Output closed; the child is exiting. Bound the wait as well.
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(CollectorError::Unavailable);
+                }
+            }
+        };
+        let stdout = String::from_utf8(bytes).map_err(|_| CollectorError::Malformed)?;
+        Ok(Output { stdout, success: status.success() })
+    }
+}
