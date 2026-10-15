@@ -133,10 +133,18 @@ pub fn mark_active(path: &Path, name: &str) -> Result<(), ConfigError> {
     }
     let out = toml::to_string(&doc).map_err(|_| fail("cannot serialize config"))?;
     let file_name = path.file_name().ok_or_else(|| fail("config path has no file name"))?;
-    let tmp = path.with_file_name(format!(".{}.tmp", file_name.to_string_lossy()));
+    // Unique per call, and created exclusively so a planted file or symlink
+    // at the temp path is an error rather than a redirected write.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let tmp = path.with_file_name(format!(
+        ".{}.{}.{}.tmp",
+        file_name.to_string_lossy(),
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     let write = || -> std::io::Result<()> {
         use std::io::Write;
-        let mut file = std::fs::File::create(&tmp)?;
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
         file.write_all(out.as_bytes())?;
         file.sync_all()?;
         std::fs::rename(&tmp, path)
