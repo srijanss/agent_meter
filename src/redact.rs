@@ -17,7 +17,49 @@ fn redact_line(line: &str) -> String {
             return format!("{}: {MARK}", name.trim());
         }
     }
-    line.split(' ').map(redact_word).collect::<Vec<_>>().join(" ")
+    let line = redact_json_pairs(line);
+    let is_delimiter = |c: char| c.is_whitespace() || matches!(c, '{' | '}' | '[' | ']' | ':');
+    let mut out = String::with_capacity(line.len());
+    let mut word_start = 0;
+    for (i, c) in line.char_indices() {
+        if is_delimiter(c) {
+            out.push_str(&redact_word(&line[word_start..i]));
+            out.push(c);
+            word_start = i + c.len_utf8();
+        }
+    }
+    out.push_str(&redact_word(&line[word_start..]));
+    out
+}
+
+/// Replaces the string value of every `"secret_key": "value"` pair.
+fn redact_json_pairs(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(open) = rest.find('"') {
+        let after_open = &rest[open + 1..];
+        let Some(close) = after_open.find('"') else { break };
+        let key = &after_open[..close];
+        let tail = &after_open[close + 1..];
+        let colon = tail.trim_start();
+        let value = colon.strip_prefix(':').map(str::trim_start);
+        match value {
+            Some(v) if is_secret_key(key) && v.starts_with('"') => {
+                let value_start = line.len() - v.len() + 1;
+                let value_len = v[1..].find('"').unwrap_or(v.len() - 1);
+                out.push_str(&line[line.len() - rest.len()..value_start]);
+                out.push_str(MARK);
+                rest = &line[value_start + value_len..];
+            }
+            _ => {
+                let consumed = open + 1 + close + 1;
+                out.push_str(&rest[..consumed]);
+                rest = &rest[consumed..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 fn redact_word(word: &str) -> String {
