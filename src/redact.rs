@@ -3,14 +3,17 @@
 
 const MARK: &str = "[redacted]";
 /// Whole words (split on `_`, `-`, `.`) that mark a key as secret-bearing.
-const SECRET_KEY_WORDS: [&str; 9] =
-    ["token", "key", "apikey", "secret", "password", "passwd", "session", "sessionid", "credential"];
+const SECRET_KEY_WORDS: [&str; 10] = [
+    "token", "key", "apikey", "secret", "password", "passwd", "session", "sessionid", "credential",
+    "pin",
+];
 const SECRET_HEADERS: [&str; 3] = ["authorization", "cookie", "set-cookie"];
 
 /// Returns `text` with emails, org/account UUIDs, API tokens, secret-looking
 /// `key=value` pairs and credential header lines replaced by `[redacted]`.
 pub fn redact(text: &str) -> String {
-    text.split('\n').map(redact_line).collect::<Vec<_>>().join("\n")
+    // Pairs may span lines (`"token":\n "abc"`), so scan the whole text first.
+    redact_json_pairs(text).split('\n').map(redact_line).collect::<Vec<_>>().join("\n")
 }
 
 fn redact_line(line: &str) -> String {
@@ -113,6 +116,16 @@ fn redact_json_pairs(line: &str) -> String {
                 let value_end = (value_start + value_len + 1).min(line.len());
                 out.push_str(&line[value_start + value_len..value_end]);
                 rest = &line[value_end..];
+            }
+            Some(v) if is_secret_key(key) && !v.is_empty() && !v.starts_with(['{', '[']) => {
+                // Bare scalar (number, bool, null): swap for a string marker so
+                // the JSON stays parseable.
+                let value_start = line.len() - v.len();
+                let len = v.find([',', '}', ']', '\n']).unwrap_or(v.len());
+                let bare = v[..len].trim_end();
+                out.push_str(&line[line.len() - rest.len()..value_start]);
+                out.push_str(&format!("\"{MARK}\""));
+                rest = &line[value_start + bare.len()..];
             }
             _ => {
                 let consumed = open + 1 + close + 1;
