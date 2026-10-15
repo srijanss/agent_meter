@@ -16,3 +16,21 @@ pub fn countdown_label(resets_at: DateTime<Utc>, now: DateTime<Utc>) -> String {
         format!("{mins}m")
     }
 }
+
+/// What to show for a window's reset time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResetDisplay {
+    /// Time left until the reset, e.g. "2h 0m".
+    Remaining(String),
+    /// The reset time has already passed: the data needs a refresh, so no
+    /// (negative) countdown is shown.
+    Stale,
+}
+
+pub fn reset_display(resets_at: DateTime<Utc>, now: DateTime<Utc>) -> ResetDisplay {
+    if resets_at <= now {
+        ResetDisplay::Stale
+    } else {
+        ResetDisplay::Remaining(countdown_label(resets_at, now))
+    }
+}
