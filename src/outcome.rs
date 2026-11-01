@@ -17,7 +17,7 @@ pub fn entry_for(account: Account, outcome: AccountOutcome) -> AccountEntry {
 /// never carries provider output.
 pub fn unavailable_reason(error: CollectorError) -> &'static str {
     match error {
-        CollectorError::Unavailable => "CLI not found",
+        CollectorError::Unavailable => "CLI not found or provider unreachable",
         CollectorError::SignInRequired => "Sign-in required",
         CollectorError::RateLimited => "Rate limited",
         CollectorError::Malformed => "Unreadable response",

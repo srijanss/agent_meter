@@ -37,7 +37,7 @@ fn a_measured_account_carries_its_snapshot() {
 
 #[test]
 fn each_failure_has_a_distinct_plain_reason_for_the_hover() {
-    assert_eq!(unavailable_reason(CollectorError::Unavailable), "CLI not found");
+    assert_eq!(unavailable_reason(CollectorError::Unavailable), "CLI not found or provider unreachable");
     assert_eq!(unavailable_reason(CollectorError::SignInRequired), "Sign-in required");
     let reasons: std::collections::HashSet<_> = [
         CollectorError::Unavailable,
