@@ -45,7 +45,9 @@ where
 {
     raw.enable()?;
     if let Err(error) = execute!(out, EnterAlternateScreen, EnableMouseCapture) {
-        let _ = raw.disable();
+        // Entry may have got part-way (e.g. the alternate screen is on but
+        // mouse capture failed), so undo everything and report the original error.
+        let _ = restore(out, raw);
         return Err(error);
     }
     let outcome = catch_unwind(AssertUnwindSafe(|| body(out)));
