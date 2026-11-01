@@ -113,6 +113,18 @@ fn a_non_claude_account_never_launches_the_cli() {
     assert!(fake.calls.borrow().is_empty());
 }
 
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_config_dir_is_refused_not_rewritten() {
+    use std::os::unix::ffi::OsStringExt;
+    let home = PathBuf::from(std::ffi::OsString::from_vec(b"/cfg/\xff".to_vec()));
+    let odd = Account { home, ..account() };
+    let fake = Fake { auth: logged_in(), usage: usage_ok(), calls: RefCell::new(Vec::new()) };
+    let now = Utc.with_ymd_and_hms(2026, 11, 1, 12, 0, 0).unwrap();
+    assert_eq!(collect_claude(&fake, &odd, now), Err(CollectorError::Internal));
+    assert!(fake.calls.borrow().is_empty(), "the CLI must not run against a different directory");
+}
+
 #[test]
 fn failures_map_to_plain_errors() {
     assert_eq!(run(Err(CollectorError::Unavailable), usage_ok()).0, Err(CollectorError::Unavailable));

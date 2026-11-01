@@ -29,10 +29,11 @@ pub fn collect_claude(
         return Err(CollectorError::Internal);
     }
     let (var, home) = account.home_env();
-    let home = home.to_string_lossy();
+    // Never substitute replacement characters: that would point the CLI at another directory.
+    let home = home.to_str().ok_or(CollectorError::Internal)?;
     let command = |args: &[&str]| {
         CommandSpec::new("claude", args.iter().copied())
-            .and_then(|spec| spec.with_env(var, &home))
+            .and_then(|spec| spec.with_env(var, home))
             .map_err(|_| CollectorError::Internal)
     };
 
