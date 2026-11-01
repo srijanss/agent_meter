@@ -9,7 +9,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::account::Account;
+use crate::account::{Account, Provider};
 use crate::claude_usage::parse_claude_usage;
 use crate::failure::CollectorError;
 use crate::runner::{CommandRunner, CommandSpec, Limits};
@@ -24,6 +24,10 @@ pub fn collect_claude(
     account: &Account,
     now: DateTime<Utc>,
 ) -> Result<Snapshot, CollectorError> {
+    // Another provider's account would set the wrong variable and read the default profile.
+    if account.provider != Provider::Claude {
+        return Err(CollectorError::Internal);
+    }
     let (var, home) = account.home_env();
     let home = home.to_string_lossy();
     let command = |args: &[&str]| {

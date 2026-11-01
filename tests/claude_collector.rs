@@ -105,6 +105,15 @@ fn a_failed_process_is_not_trusted_even_with_plausible_output() {
 }
 
 #[test]
+fn a_non_claude_account_never_launches_the_cli() {
+    let fake = Fake { auth: logged_in(), usage: usage_ok(), calls: RefCell::new(Vec::new()) };
+    let codex = Account { provider: Provider::Codex, ..account() };
+    let now = Utc.with_ymd_and_hms(2026, 11, 1, 12, 0, 0).unwrap();
+    assert_eq!(collect_claude(&fake, &codex, now), Err(CollectorError::Internal));
+    assert!(fake.calls.borrow().is_empty());
+}
+
+#[test]
 fn failures_map_to_plain_errors() {
     assert_eq!(run(Err(CollectorError::Unavailable), usage_ok()).0, Err(CollectorError::Unavailable));
     assert_eq!(run(ok("not json"), usage_ok()).0, Err(CollectorError::Malformed));
