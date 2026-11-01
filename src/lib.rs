@@ -11,3 +11,4 @@ pub mod redact;
 pub mod refresh;
 pub mod account;
 pub mod runner;
+pub mod terminal;
