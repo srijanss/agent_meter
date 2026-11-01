@@ -91,6 +91,20 @@ fn signed_out_stops_before_usage_is_asked() {
 }
 
 #[test]
+fn a_failed_process_is_not_trusted_even_with_plausible_output() {
+    let failed = |out: Result<Output, CollectorError>| {
+        let output = out.unwrap();
+        Ok(Output { success: false, ..output })
+    };
+    // Auth exited non-zero but printed loggedIn:true: no usage call is made.
+    let (result, calls) = run(failed(logged_in()), usage_ok());
+    assert_eq!(result, Err(CollectorError::Unavailable));
+    assert_eq!(calls.len(), 1);
+    // Usage exited non-zero but printed a result: not accepted as a snapshot.
+    assert_eq!(run(logged_in(), failed(usage_ok())).0, Err(CollectorError::Unavailable));
+}
+
+#[test]
 fn failures_map_to_plain_errors() {
     assert_eq!(run(Err(CollectorError::Unavailable), usage_ok()).0, Err(CollectorError::Unavailable));
     assert_eq!(run(ok("not json"), usage_ok()).0, Err(CollectorError::Malformed));

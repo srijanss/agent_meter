@@ -33,17 +33,21 @@ pub fn collect_claude(
     };
 
     let auth = runner.run(&command(&["auth", "status", "--json"])?, &AUTH_LIMITS)?;
+    let auth_ok = auth.success;
     let auth: Value = serde_json::from_str(&auth.stdout).map_err(|_| CollectorError::Malformed)?;
     match auth.get("loggedIn").and_then(Value::as_bool) {
-        Some(true) => {}
+        // Signed out is reported with a non-zero exit too; that is still a sign-in prompt.
         Some(false) => return Err(CollectorError::SignInRequired),
+        Some(true) if auth_ok => {}
+        Some(true) => return Err(CollectorError::Unavailable),
         None => return Err(CollectorError::Malformed),
     }
     let plan = auth.get("subscriptionType").and_then(Value::as_str).and_then(plan_label);
 
     let usage = runner.run(&command(&["-p", "/usage", "--output-format", "json"])?, &USAGE_LIMITS)?;
+    let usage_ok = usage.success;
     let usage: Value = serde_json::from_str(&usage.stdout).map_err(|_| CollectorError::Malformed)?;
-    if usage.get("is_error").and_then(Value::as_bool) == Some(true) {
+    if !usage_ok || usage.get("is_error").and_then(Value::as_bool) == Some(true) {
         return Err(CollectorError::Unavailable);
     }
     let text = usage.get("result").and_then(Value::as_str).ok_or(CollectorError::Malformed)?;
