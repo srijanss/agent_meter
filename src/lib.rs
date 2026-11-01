@@ -23,3 +23,4 @@ pub mod codex_collector;
 pub mod system_session;
 pub mod tooltip;
 pub mod collection;
+pub mod app;
