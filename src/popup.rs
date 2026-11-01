@@ -87,6 +87,8 @@ pub fn refresh_button(area: Rect) -> Rect {
 enum BodyRow {
     /// Left text and right-aligned text on one line.
     Split { left: Line<'static>, right: Line<'static> },
+    /// An account heading; `use_for` names the account when the row offers a Use link.
+    Account { left: Line<'static>, right: Line<'static>, use_for: Option<String> },
     /// A usage window: title, meter, and time left.
     Window { title: String, fill: Option<f64>, scoped: Vec<f64>, time_left: String },
     Blank,
@@ -176,12 +178,47 @@ fn account_row(entry: &AccountEntry) -> BodyRow {
         Some(plan) => format!("{} · {plan}", entry.account.name),
         None => entry.account.name.clone(),
     };
-    let right = if entry.account.active {
-        Line::from(Span::styled("ACTIVE", Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)))
+    let (right, use_for) = if entry.account.active {
+        (
+            Line::from(Span::styled("ACTIVE", Style::new().fg(ACCENT).add_modifier(Modifier::BOLD))),
+            None,
+        )
     } else {
-        dim("Use".to_string())
+        (dim(USE_LABEL.to_string()), Some(entry.account.name.clone()))
     };
-    BodyRow::Split { left: Line::from(Span::styled(name, Style::new().add_modifier(Modifier::BOLD))), right }
+    BodyRow::Account {
+        left: Line::from(Span::styled(name, Style::new().add_modifier(Modifier::BOLD))),
+        right,
+        use_for,
+    }
+}
+
+const USE_LABEL: &str = "Use";
+
+/// A clickable "Use" link: choosing it marks `account` as the one in use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UseLink {
+    pub account: String,
+    pub area: Rect,
+}
+
+/// The Use links of a popup drawn in `area`, top to bottom. Hit-testing and
+/// the number keys both read this, so they match what is drawn.
+pub fn use_links(area: Rect, entries: &[AccountEntry], now: DateTime<Utc>) -> Vec<UseLink> {
+    let body = regions(area)[2];
+    let width = USE_LABEL.len() as u16;
+    body_rows(entries, now)
+        .iter()
+        .take(body.height as usize)
+        .enumerate()
+        .filter_map(|(offset, row)| match row {
+            BodyRow::Account { use_for: Some(account), .. } if body.width >= width => Some(UseLink {
+                account: account.clone(),
+                area: Rect::new(body.x + body.width - width, body.y + offset as u16, width, 1),
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
 fn dim(text: String) -> Line<'static> {
@@ -192,7 +229,7 @@ fn render_body(frame: &mut Frame, area: Rect, rows: &[BodyRow]) {
     for (offset, row) in rows.iter().enumerate().take(area.height as usize) {
         let line = Rect::new(area.x, area.y + offset as u16, area.width, 1);
         match row {
-            BodyRow::Split { left, right } => {
+            BodyRow::Split { left, right } | BodyRow::Account { left, right, .. } => {
                 let width = right.width() as u16;
                 let [left_area, right_area] =
                     Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(line);
