@@ -14,6 +14,8 @@ use crate::session::{LineSession, SessionStarter};
 
 /// Longest line accepted from the child.
 const MAX_LINE: usize = 1024 * 1024;
+/// Longest line `send` accepts; well under the smallest common pipe buffer (64 KiB).
+const MAX_SEND: usize = 16 * 1024;
 /// Lines buffered ahead of `recv`; a flooding child blocks instead of growing memory.
 const QUEUE: usize = 64;
 
@@ -62,6 +64,11 @@ struct ProcessSession {
 
 impl LineSession for ProcessSession {
     fn send(&mut self, line: &str) -> Result<(), CollectorError> {
+        // The write is blocking: a line that fits the pipe buffer cannot stall on a
+        // child that is not reading, so anything larger is refused up front.
+        if line.len() > MAX_SEND {
+            return Err(CollectorError::Internal);
+        }
         writeln!(self.stdin, "{line}")
             .and_then(|()| self.stdin.flush())
             .map_err(|_| CollectorError::Unavailable)
