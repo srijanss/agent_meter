@@ -109,16 +109,38 @@ fn private_dir() -> std::path::PathBuf {
     panic!("no unused private test dir name");
 }
 
-/// Portable liveness via `ps`: a missing or zombie process is gone. If `ps`
-/// itself cannot be run the test fails; it never counts as termination.
 fn is_alive(pid: i32) -> bool {
+    is_alive_arg(&pid.to_string())
+}
+
+/// Portable liveness via `ps`. Only a clean "no such process" (exit 1, nothing
+/// on stdout or stderr) or a zombie counts as gone. Any other `ps` failure
+/// panics: an inspection failure must never read as termination.
+fn is_alive_arg(pid: &str) -> bool {
     let output = std::process::Command::new("ps")
-        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .args(["-o", "stat=", "-p", pid])
         .output()
         .expect("ps must be runnable to check liveness");
     let stat = String::from_utf8_lossy(&output.stdout);
     let stat = stat.trim();
-    !(stat.is_empty() || stat.starts_with('Z'))
+    if output.status.success() {
+        return !(stat.is_empty() || stat.starts_with('Z'));
+    }
+    let clean_absence = output.status.code() == Some(1) && stat.is_empty() && output.stderr.is_empty();
+    assert!(clean_absence, "ps failed to inspect {pid}: {:?} {}", output.status, String::from_utf8_lossy(&output.stderr));
+    false
+}
+
+#[test]
+fn liveness_tells_a_missing_process_from_a_failed_inspection() {
+    assert!(is_alive(std::process::id() as i32), "this test process is alive");
+    assert!(!is_alive(i32::MAX), "no such process is gone");
+}
+
+#[test]
+#[should_panic(expected = "ps failed to inspect")]
+fn a_failed_inspection_is_never_read_as_termination() {
+    is_alive_arg("not-a-pid");
 }
 
 #[test]
