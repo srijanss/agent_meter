@@ -12,6 +12,9 @@ pub struct RowView {
     pub label: String,
     pub fill: Option<f64>,
     pub reset: Option<ResetDisplay>,
+    /// Fill fractions of known scoped allowances on this window's clock; an
+    /// unknown scoped percent is dropped, never drawn as 0.
+    pub scoped: Vec<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -44,7 +47,8 @@ pub fn account_view(snapshot: &Snapshot, now: DateTime<Utc>) -> AccountView {
             let reset = fill
                 .and(w.resets_at)
                 .map(|at| reset_display(at, now));
-            RowView { label: w.label.clone(), fill, reset }
+            let scoped = w.scoped.iter().filter_map(|s| fill_fraction(s.used_percent)).collect();
+            RowView { label: w.label.clone(), fill, reset, scoped }
         })
         .collect();
     if rows.iter().any(|r| r.fill.is_some()) {

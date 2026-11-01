@@ -68,7 +68,7 @@ enum BodyRow {
     /// Left text and right-aligned text on one line.
     Split { left: Line<'static>, right: Line<'static> },
     /// A usage window: title, meter, and time left.
-    Window { title: String, fill: Option<f64>, time_left: String },
+    Window { title: String, fill: Option<f64>, scoped: Vec<f64>, time_left: String },
     Blank,
     Rule,
 }
@@ -131,6 +131,7 @@ fn window_rows(entry: &AccountEntry, now: DateTime<Utc>) -> Vec<BodyRow> {
             .map(|row| BodyRow::Window {
                 title: row.label,
                 fill: row.fill,
+                scoped: row.scoped,
                 time_left: match row.reset {
                     Some(ResetDisplay::Remaining(left)) => left,
                     Some(ResetDisplay::Stale) | None => String::new(),
@@ -178,7 +179,7 @@ fn render_body(frame: &mut Frame, area: Rect, rows: &[BodyRow]) {
                 frame.render_widget(Paragraph::new(left.clone()), left_area);
                 frame.render_widget(Paragraph::new(right.clone()), right_area);
             }
-            BodyRow::Window { title, fill, time_left } => {
+            BodyRow::Window { title, fill, scoped, time_left } => {
                 let [title_area, _, meter_area, _, time_area] = Layout::horizontal([
                     Constraint::Length(TITLE_WIDTH),
                     Constraint::Length(1),
@@ -188,7 +189,7 @@ fn render_body(frame: &mut Frame, area: Rect, rows: &[BodyRow]) {
                 ])
                 .areas(line);
                 frame.render_widget(Paragraph::new(title.as_str()), title_area);
-                frame.render_widget(Paragraph::new(meter_line(*fill, meter_area.width)), meter_area);
+                frame.render_widget(Paragraph::new(meter_line(*fill, scoped, meter_area.width)), meter_area);
                 frame.render_widget(
                     Paragraph::new(time_left.as_str())
                         .alignment(Alignment::Right)
@@ -202,15 +203,25 @@ fn render_body(frame: &mut Frame, area: Rect, rows: &[BodyRow]) {
     }
 }
 
-/// A meter track of `width` cells, filled in proportion to `fill`.
-fn meter_line(fill: Option<f64>, width: u16) -> Line<'static> {
+/// A meter track of `width` cells, filled in proportion to `fill`, with a tick
+/// at each scoped allowance's used percent.
+fn meter_line(fill: Option<f64>, scoped: &[f64], width: u16) -> Line<'static> {
     let width = width as usize;
     let filled = fill.map_or(0, |f| (f * width as f64).round() as usize).min(width);
     let color = if fill.is_some_and(|f| f >= URGENT_FILL) { Color::Red } else { Color::White };
-    Line::from(vec![
-        Span::styled("━".repeat(filled), Style::new().fg(color)),
-        Span::styled("━".repeat(width - filled), Style::new().fg(Color::DarkGray)),
-    ])
+    let mut cells: Vec<Span<'static>> = (0..width)
+        .map(|i| {
+            let track = if i < filled { color } else { Color::DarkGray };
+            Span::styled("━", Style::new().fg(track))
+        })
+        .collect();
+    for fraction in scoped {
+        if width > 0 {
+            let at = ((fraction * width as f64).floor() as usize).min(width - 1);
+            cells[at] = Span::styled("┃", Style::new().fg(ACCENT));
+        }
+    }
+    Line::from(cells)
 }
 
 fn render_header(frame: &mut Frame, area: Rect) {
