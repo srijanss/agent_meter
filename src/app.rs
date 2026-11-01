@@ -187,12 +187,14 @@ impl App {
 
     fn use_account(&mut self, name: &str) -> Result<(), AppError> {
         mark_active(&self.config_path, name).map_err(|e| AppError::new(e.to_string()))?;
+        // Load first: if the config cannot be read back, nothing changes.
+        let accounts = load_accounts(&self.config_path, &self.user_home)?;
         let mut snapshots: HashMap<String, Option<Snapshot>> = self
             .entries
             .drain(..)
             .map(|entry| (entry.account.name, entry.snapshot))
             .collect();
-        self.entries = load_accounts(&self.config_path, &self.user_home)?
+        self.entries = accounts
             .into_iter()
             .map(|account| {
                 let snapshot = snapshots.remove(&account.name).flatten();

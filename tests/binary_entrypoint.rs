@@ -264,3 +264,36 @@ fn events_close_refresh_and_switch_the_active_account() {
     app.handle(&key(KeyCode::Esc), AREA, now(), t0).unwrap();
     assert!(app.should_quit());
 }
+
+#[test]
+fn a_failed_account_switch_reports_an_error_and_keeps_every_account_and_its_data() {
+    let dir = scratch("app_switch_failure");
+    let path = config_in(&dir, CONFIG);
+    let script = Script::new(true);
+    script.set("claude-a", Ok(snapshot("claude", 42.0)));
+    script.set("claude-b", Ok(snapshot("claude", 11.0)));
+    script.set("codex-x", Ok(snapshot("codex", 7.0)));
+    let mut app = App::new(path.clone(), Path::new(HOME), script.factory(), Duration::from_secs(30)).unwrap();
+    let t0 = Instant::now();
+    app.refresh(t0);
+    wait_until_idle(&mut app, t0);
+
+    // The config is edited elsewhere into something this program cannot load.
+    let mut text = fs::read_to_string(&path).unwrap();
+    text.push_str("\n[accounts.broken]\nprovider = \"claude\"\nunsupported = \"SECRETVALUE\"\n");
+    fs::write(&path, text).unwrap();
+
+    let error = app.handle(&key(KeyCode::Char('1')), AREA, now(), t0);
+    assert!(error.is_err(), "the failed switch is reported");
+    assert!(!error.unwrap_err().to_string().contains("SECRETVALUE"));
+    assert_eq!(app.entries().len(), 3, "the popup keeps its accounts");
+    assert_eq!(used(&app, "claude-a"), Some(Some(42.0)));
+    assert_eq!(used(&app, "claude-b"), Some(Some(11.0)));
+    assert_eq!(used(&app, "codex-x"), Some(Some(7.0)));
+
+    // A switch whose config cannot be rewritten at all also changes nothing.
+    fs::remove_file(&path).unwrap();
+    assert!(app.handle(&key(KeyCode::Char('1')), AREA, now(), t0).is_err());
+    assert_eq!(app.entries().len(), 3);
+    assert_eq!(used(&app, "claude-a"), Some(Some(42.0)));
+}
