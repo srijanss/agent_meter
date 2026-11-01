@@ -2,7 +2,7 @@
 //!
 //! Anything it cannot read becomes unknown (`None`), never a guess.
 
-use chrono::{DateTime, Datelike, LocalResult, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Duration, LocalResult, NaiveDate, TimeZone, Utc};
 use chrono_tz::Tz;
 
 use crate::snapshot::{Health, ScopedAllowance, Snapshot, Source, Window};
@@ -130,13 +130,26 @@ fn parse_reset(text: &str, collected_at: DateTime<Utc>) -> Option<DateTime<Utc>>
             continue; // e.g. Feb 29 in a non-leap year
         };
         let instant = match zone.from_local_datetime(&naive) {
-            LocalResult::Single(at) => at,
-            // Skipped by a DST jump, or happening twice: the text does not say
-            // which, so the reset is unknown rather than guessed.
-            LocalResult::Ambiguous(..) | LocalResult::None => return None,
+            LocalResult::Single(at) => at.with_timezone(&Utc),
+            // Happens twice and the text does not say which: unknown if either
+            // could still be ahead, otherwise this year's is already over.
+            LocalResult::Ambiguous(first, second) => {
+                if first.max(second).with_timezone(&Utc) > collected_at {
+                    return None;
+                }
+                continue;
+            }
+            // Skipped by a DST jump. Offsets are under a day, so a wall-clock
+            // time a full day before collection is certainly past.
+            LocalResult::None => {
+                if naive.and_utc() + Duration::days(1) > collected_at {
+                    return None;
+                }
+                continue;
+            }
         };
-        if instant.with_timezone(&Utc) > collected_at {
-            return Some(instant.with_timezone(&Utc));
+        if instant > collected_at {
+            return Some(instant);
         }
     }
     None
