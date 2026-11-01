@@ -25,15 +25,42 @@ pub struct AccountEntry {
 
 pub fn render_popup(frame: &mut Frame, entries: &[AccountEntry], now: DateTime<Utc>) {
     let block = Block::bordered().border_style(Style::new().fg(ACCENT));
-    let inner = block.inner(frame.area());
     frame.render_widget(block, frame.area());
 
-    let [header, divider, body] =
-        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(0)])
-            .areas(inner);
+    let [header, divider, body] = regions(frame.area());
     render_header(frame, header);
     render_divider(frame, divider);
     render_body(frame, body, &body_rows(entries, now));
+}
+
+/// Header, divider and body areas inside the popup border. Shared by drawing
+/// and hit-testing so clicks always land where things are drawn.
+fn regions(area: Rect) -> [Rect; 3] {
+    let inner = Block::bordered().inner(area);
+    Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(0)])
+        .areas(inner)
+}
+
+/// Width of the header's button column: ` ↻ ` + gap + ` × `.
+const BUTTONS_WIDTH: u16 = 7;
+
+/// Splits the header into its title and, when all of it fits, the button column.
+fn header_parts(header: Rect) -> (Rect, Option<Rect>) {
+    if header.height == 0 || header.width < BUTTONS_WIDTH {
+        return (header, None);
+    }
+    let [title, buttons] =
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(BUTTONS_WIDTH)]).areas(header);
+    (title, Some(buttons))
+}
+
+/// The clickable close (×) button of a popup drawn in `area`; empty when the
+/// header is too narrow to show it.
+pub fn close_button(area: Rect) -> Rect {
+    match header_parts(regions(area)[0]) {
+        (_, Some(buttons)) => Rect::new(buttons.x + 4, buttons.y, 3, 1),
+        (_, None) => Rect::default(),
+    }
 }
 
 /// One line of the popup body.
@@ -179,11 +206,11 @@ fn meter_line(fill: Option<f64>, width: u16) -> Line<'static> {
 }
 
 fn render_header(frame: &mut Frame, area: Rect) {
-    let [title, buttons] =
-        Layout::horizontal([Constraint::Min(0), Constraint::Length(7)]).areas(area);
+    let (title, buttons) = header_parts(area);
     let mark = Span::styled("[•_•] ", Style::new().fg(Color::White));
     let name = Span::styled("Agents", Style::new().add_modifier(Modifier::BOLD));
     frame.render_widget(Paragraph::new(Line::from(vec![mark, name])), title);
+    let Some(buttons) = buttons else { return };
 
     let button = Style::new().fg(ACCENT).bg(BUTTON_BG);
     let line = Line::from(vec![

@@ -13,3 +13,4 @@ pub mod account;
 pub mod runner;
 pub mod terminal;
 pub mod popup;
+pub mod input;
