@@ -29,6 +29,16 @@ pub struct Window {
     pub used_percent: Option<f64>,
     pub resets_at: Option<DateTime<Utc>>,
     pub source: Source,
+    /// Model-scoped allowances on this window's clock (e.g. a per-model weekly limit).
+    #[serde(default)]
+    pub scoped: Vec<ScopedAllowance>,
+}
+
+/// A model-scoped allowance sharing its window's reset clock.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ScopedAllowance {
+    pub label: String,
+    pub used_percent: Option<f64>,
 }
 
 /// Bonus/free reset entitlements, separate from window resets.
