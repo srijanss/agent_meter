@@ -59,7 +59,10 @@ where
 }
 
 fn restore<W: Write, R: RawMode>(out: &mut W, raw: &mut R) -> io::Result<()> {
-    let screen = execute!(out, DisableMouseCapture, LeaveAlternateScreen);
+    // Every step is attempted even if an earlier one failed, so one bad write
+    // cannot leave the screen switched or raw mode on. The first error wins.
+    let mouse = execute!(out, DisableMouseCapture);
+    let screen = execute!(out, LeaveAlternateScreen);
     let mode = raw.disable();
-    screen.and(mode)
+    mouse.and(screen).and(mode)
 }
