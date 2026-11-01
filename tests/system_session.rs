@@ -62,12 +62,17 @@ fn a_silent_child_times_out_and_hostile_output_is_refused() {
 
 #[test]
 fn dropping_a_session_kills_the_child_and_its_descendants() {
-    let dir = std::env::temp_dir().join(format!("agent-meter-drop-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = private_dir();
     let pid_file = dir.join("pid");
-    // A grandchild that would outlive the shell, recording its pid.
-    let script = format!("sleep 60 & echo $! > '{}'; echo ready; wait", pid_file.display());
-    let mut session = SystemSessionStarter.start(&sh(&script)).unwrap();
+    // A grandchild that would outlive the shell, recording its pid. The path is a
+    // positional argument, never spliced into the script text.
+    let pid_path = pid_file.to_str().unwrap();
+    let spec = CommandSpec::new(
+        "sh",
+        ["-c", r#"sleep 60 & echo $! > "$1"; echo ready; wait"#, "sh", pid_path],
+    )
+    .unwrap();
+    let mut session = SystemSessionStarter.start(&spec).unwrap();
     assert_eq!(session.recv(Duration::from_secs(10)).unwrap(), "ready");
     let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
     drop(session);
@@ -82,6 +87,26 @@ fn dropping_a_session_kills_the_child_and_its_descendants() {
     }
     let _ = std::fs::remove_dir_all(&dir);
     assert!(!alive, "grandchild {pid} survived the session");
+}
+
+/// A fresh directory only this user can enter: randomized name, created with
+/// `create_dir` (fails if it exists, never follows a pre-planted path), mode 0700.
+fn private_dir() -> std::path::PathBuf {
+    use std::os::unix::fs::DirBuilderExt;
+    let base = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    for attempt in 0..100u32 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(attempt);
+        let dir = base.join(format!("agent-meter-drop-{}-{nanos}-{attempt}", std::process::id()));
+        match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+            Ok(()) => return dir,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => panic!("cannot create private test dir: {e}"),
+        }
+    }
+    panic!("no unused private test dir name");
 }
 
 /// Portable liveness via `ps`: a missing or zombie process is gone. If `ps`
