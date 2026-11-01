@@ -9,7 +9,7 @@ use ratatui::Frame;
 
 use crate::account::{Account, Provider};
 use crate::countdown::ResetDisplay;
-use crate::display::{account_view, AccountView};
+use crate::display::{account_view, bonus_label, AccountView};
 use crate::snapshot::Snapshot;
 
 /// Border and button accent.
@@ -126,7 +126,8 @@ fn window_rows(entry: &AccountEntry, now: DateTime<Utc>) -> Vec<BodyRow> {
     };
     let Some(snapshot) = &entry.snapshot else { return unavailable() };
     let AccountView::Rows(rows) = account_view(snapshot, now) else { return unavailable() };
-    rows.into_iter()
+    let mut body: Vec<BodyRow> = rows
+        .into_iter()
         .map(|row| BodyRow::Window {
             title: row.label,
             fill: row.fill,
@@ -135,7 +136,12 @@ fn window_rows(entry: &AccountEntry, now: DateTime<Utc>) -> Vec<BodyRow> {
                 Some(ResetDisplay::Stale) | None => String::new(),
             },
         })
-        .collect()
+        .collect();
+    // Free resets get a line only when reported; absent is never drawn as 0.
+    if let Some(label) = snapshot.bonus_resets.as_ref().and_then(|bonus| bonus_label(bonus, now)) {
+        body.push(BodyRow::Split { left: dim(label), right: Line::default() });
+    }
+    body
 }
 
 fn plan_label(entry: &AccountEntry) -> Option<String> {
