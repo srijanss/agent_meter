@@ -16,3 +16,4 @@ pub mod popup;
 pub mod input;
 pub mod claude_usage;
 pub mod codex_limits;
+pub mod outcome;
