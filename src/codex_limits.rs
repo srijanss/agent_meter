@@ -63,7 +63,11 @@ fn parse_bonus_resets(credits: Option<&Value>) -> Option<BonusResets> {
         .get("availableCount")
         .and_then(Value::as_u64)
         .and_then(|n| u32::try_from(n).ok());
-    let counted = rows.and_then(|_| u32::try_from(available.len()).ok());
+    // Counting rows is only exact when every row has a readable status; a list
+    // with unreadable rows gives a lower bound at best, so it is unknown.
+    let counted = rows
+        .filter(|rows| rows.iter().all(|row| row.get("status").and_then(Value::as_str).is_some()))
+        .and_then(|_| u32::try_from(available.len()).ok());
     let remaining = reported.or(counted)?;
 
     let expires_at = available

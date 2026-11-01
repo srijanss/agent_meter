@@ -72,11 +72,11 @@ fn malformed_shapes_never_panic_and_are_not_reported() {
     for bad in [json!("many"), json!(7), json!([1, 2]), json!(true)] {
         assert_eq!(bonus(bad.clone()), None, "{bad}");
     }
-    // Rows that are not objects, or have no usable status, are skipped.
-    let b = bonus(json!({"availableCount": null, "credits": [
+    // With a valid count, unreadable rows are skipped for the expiry only.
+    let b = bonus(json!({"availableCount": 1, "credits": [
         1, "x", null, {"status": 5}, {"id": "no-status"}, credit("available", json!(1794000000))]}))
     .unwrap();
-    assert_eq!(b.remaining, Some(1));
+    assert_eq!((b.remaining, b.expires_at), (Some(1), at(1794000000)));
     // A non-array credits value is treated like missing rows.
     let b = bonus(json!({"availableCount": 4, "credits": "none"})).unwrap();
     assert_eq!((b.remaining, b.source), (Some(4), Source::ProviderReported));
