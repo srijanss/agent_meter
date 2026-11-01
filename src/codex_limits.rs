@@ -6,7 +6,7 @@
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::snapshot::{Health, Snapshot, Source, Window};
+use crate::snapshot::{BonusResets, Health, Snapshot, Source, Window};
 
 /// Window length that Codex reports for its weekly limit, in minutes.
 const WEEKLY_MINS: i64 = 10080;
@@ -38,8 +38,40 @@ pub fn parse_codex_rate_limits(result: &Value, collected_at: DateTime<Utc>, prof
         source: if known { Source::ProviderReported } else { Source::Unknown },
         health: if known { Health::Ok } else { Health::Unsupported },
         windows,
-        bonus_resets: None,
+        bonus_resets: parse_bonus_resets(result.get("rateLimitResetCredits")),
     }
+}
+
+/// Free reset credits from `rateLimitResetCredits`.
+///
+/// Absent or unusable data stays `None` (not reported), never 0. The backend's
+/// `availableCount` is the total when valid, because the detail list may be
+/// capped or missing; otherwise the `available` rows are counted. The expiry is
+/// the soonest among the available rows that expire at all.
+fn parse_bonus_resets(credits: Option<&Value>) -> Option<BonusResets> {
+    let credits = credits.filter(|v| v.is_object())?;
+    let rows = credits.get("credits").and_then(Value::as_array);
+    let available: Vec<&Value> = rows
+        .map(|rows| {
+            rows.iter()
+                .filter(|row| row.get("status").and_then(Value::as_str) == Some("available"))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let reported = credits
+        .get("availableCount")
+        .and_then(Value::as_u64)
+        .and_then(|n| u32::try_from(n).ok());
+    let counted = rows.and_then(|_| u32::try_from(available.len()).ok());
+    let remaining = reported.or(counted)?;
+
+    let expires_at = available
+        .iter()
+        .filter_map(|row| row.get("expiresAt").and_then(Value::as_i64))
+        .filter_map(|secs| DateTime::from_timestamp(secs, 0))
+        .min();
+    Some(BonusResets { remaining: Some(remaining), expires_at, source: Source::ProviderReported })
 }
 
 fn parse_window(slot: &str, window: &Value) -> Window {
