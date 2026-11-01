@@ -26,16 +26,30 @@ impl Collections {
     where
         F: FnOnce() -> Result<Snapshot, CollectorError> + Send + 'static,
     {
+        self.spawn_with(
+            |work| thread::Builder::new().name("collection".into()).spawn(work).map(drop),
+            account,
+            job,
+        );
+    }
+
+    /// Like `spawn`, but `start` decides how the work is run. If `start` fails the
+    /// job is dropped unrun and the account reports exactly one `Unavailable`.
+    pub fn spawn_with<S, F>(&self, start: S, account: String, job: F)
+    where
+        S: FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<()>,
+        F: FnOnce() -> Result<Snapshot, CollectorError> + Send + 'static,
+    {
         let results = self.results.clone();
         let name = account.clone();
-        let started = thread::Builder::new().name("collection".into()).spawn(move || {
+        let work = Box::new(move || {
             let collect: Collect = Box::new(job);
             // `collect_all` isolates panics, including ones with hostile payloads.
             for outcome in collect_all(vec![(account, collect)]) {
                 let _ = results.send(outcome);
             }
         });
-        if started.is_err() {
+        if start(work).is_err() {
             let _ = self.results.send((name, AccountOutcome::Failed(CollectorError::Unavailable)));
         }
     }

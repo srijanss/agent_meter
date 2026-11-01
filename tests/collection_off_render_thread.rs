@@ -66,3 +66,24 @@ fn a_panicking_collection_reports_an_internal_failure_and_the_worker_survives() 
     let next = drain(&collections, 1);
     assert_eq!(next, vec![("next".to_string(), AccountOutcome::Failed(CollectorError::RateLimited))]);
 }
+
+#[test]
+fn a_job_that_cannot_be_started_reports_one_unavailable_and_never_runs() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let collections = Collections::new();
+    let ran = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&ran);
+    collections.spawn_with(
+        |_work| Err(std::io::Error::other("no threads")),
+        "stuck".into(),
+        move || {
+            flag.store(true, Ordering::SeqCst);
+            Ok(snapshot("stuck"))
+        },
+    );
+    let got = collections.poll();
+    assert_eq!(got, vec![("stuck".to_string(), AccountOutcome::Failed(CollectorError::Unavailable))]);
+    assert!(!ran.load(Ordering::SeqCst), "the job must not run when it cannot start");
+}
