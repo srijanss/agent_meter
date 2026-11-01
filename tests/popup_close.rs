@@ -59,7 +59,11 @@ fn popup_closes_on_the_close_button_and_on_escape_only() {
     assert_eq!(action_for(&key(KeyCode::Esc, KeyEventKind::Press), AREA), Some(Action::Close));
 
     // Nothing else does: other buttons, other areas, other mouse buttons, other keys.
-    assert_eq!(action_for(&click(MouseButton::Left, refresh), AREA), None, "refresh is not close");
+    assert_eq!(
+        action_for(&click(MouseButton::Left, refresh), AREA),
+        Some(Action::Refresh),
+        "the refresh button refreshes; it does not close"
+    );
     assert_eq!(action_for(&click(MouseButton::Left, title), AREA), None, "title is not close");
     assert_eq!(action_for(&click(MouseButton::Left, (close.0, close.1 + 1)), AREA), None);
     assert_eq!(action_for(&click(MouseButton::Right, close), AREA), None, "right click");

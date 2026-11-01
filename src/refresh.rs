@@ -39,9 +39,27 @@ impl RefreshGate {
         RefreshDecision::Start
     }
 
+    /// Whether any collection is currently running.
+    pub fn any_in_flight(&self) -> bool {
+        !self.in_flight.is_empty()
+    }
+
     pub fn finish(&mut self, account: &str, now: Instant) {
         if self.in_flight.remove(account).is_some() {
             self.last_finished.insert(account.to_string(), now);
         }
     }
+}
+
+/// The accounts a manual "refresh all" may start now, in the given order.
+///
+/// Accounts already collecting or still rate limited are skipped, so repeated
+/// presses never pile up work. Each returned account is marked in flight; the
+/// caller must `finish` it when its collection ends.
+pub fn accounts_to_refresh(gate: &mut RefreshGate, accounts: &[String], now: Instant) -> Vec<String> {
+    accounts
+        .iter()
+        .filter(|account| gate.request(account, now) == RefreshDecision::Start)
+        .cloned()
+        .collect()
 }

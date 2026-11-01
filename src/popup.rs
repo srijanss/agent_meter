@@ -24,11 +24,22 @@ pub struct AccountEntry {
 }
 
 pub fn render_popup(frame: &mut Frame, entries: &[AccountEntry], now: DateTime<Utc>) {
+    render_popup_with(frame, entries, now, false);
+}
+
+/// Like `render_popup`; while `refreshing`, the refresh button shows an
+/// in-progress indicator.
+pub fn render_popup_with(
+    frame: &mut Frame,
+    entries: &[AccountEntry],
+    now: DateTime<Utc>,
+    refreshing: bool,
+) {
     let block = Block::bordered().border_style(Style::new().fg(ACCENT));
     frame.render_widget(block, frame.area());
 
     let [header, divider, body] = regions(frame.area());
-    render_header(frame, header);
+    render_header(frame, header, refreshing);
     render_divider(frame, divider);
     render_body(frame, body, &body_rows(entries, now));
 }
@@ -59,6 +70,15 @@ fn header_parts(header: Rect) -> (Rect, Option<Rect>) {
 pub fn close_button(area: Rect) -> Rect {
     match header_parts(regions(area)[0]) {
         (_, Some(buttons)) => Rect::new(buttons.x + 4, buttons.y, 3, 1),
+        (_, None) => Rect::default(),
+    }
+}
+
+/// The clickable refresh (↻) button of a popup drawn in `area`; empty when the
+/// header is too narrow to show it.
+pub fn refresh_button(area: Rect) -> Rect {
+    match header_parts(regions(area)[0]) {
+        (_, Some(buttons)) => Rect::new(buttons.x, buttons.y, 3, 1),
         (_, None) => Rect::default(),
     }
 }
@@ -224,7 +244,7 @@ fn meter_line(fill: Option<f64>, scoped: &[f64], width: u16) -> Line<'static> {
     Line::from(cells)
 }
 
-fn render_header(frame: &mut Frame, area: Rect) {
+fn render_header(frame: &mut Frame, area: Rect, refreshing: bool) {
     let (title, buttons) = header_parts(area);
     let mark = Span::styled("[•_•] ", Style::new().fg(Color::White));
     let name = Span::styled("Agents", Style::new().add_modifier(Modifier::BOLD));
@@ -233,7 +253,7 @@ fn render_header(frame: &mut Frame, area: Rect) {
 
     let button = Style::new().fg(ACCENT).bg(BUTTON_BG);
     let line = Line::from(vec![
-        Span::styled(" ↻ ", button),
+        Span::styled(if refreshing { " … " } else { " ↻ " }, button),
         Span::raw(" "),
         Span::styled(" × ", button),
     ]);
