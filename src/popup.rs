@@ -125,18 +125,20 @@ fn window_rows(entry: &AccountEntry, now: DateTime<Utc>) -> Vec<BodyRow> {
         vec![BodyRow::Split { left: dim("Usage unavailable".to_string()), right: Line::default() }]
     };
     let Some(snapshot) = &entry.snapshot else { return unavailable() };
-    let AccountView::Rows(rows) = account_view(snapshot, now) else { return unavailable() };
-    let mut body: Vec<BodyRow> = rows
-        .into_iter()
-        .map(|row| BodyRow::Window {
-            title: row.label,
-            fill: row.fill,
-            time_left: match row.reset {
-                Some(ResetDisplay::Remaining(left)) => left,
-                Some(ResetDisplay::Stale) | None => String::new(),
-            },
-        })
-        .collect();
+    let mut body: Vec<BodyRow> = match account_view(snapshot, now) {
+        AccountView::Rows(rows) => rows
+            .into_iter()
+            .map(|row| BodyRow::Window {
+                title: row.label,
+                fill: row.fill,
+                time_left: match row.reset {
+                    Some(ResetDisplay::Remaining(left)) => left,
+                    Some(ResetDisplay::Stale) | None => String::new(),
+                },
+            })
+            .collect(),
+        AccountView::Unavailable => unavailable(),
+    };
     // Free resets get a line only when reported; absent is never drawn as 0.
     if let Some(label) = snapshot.bonus_resets.as_ref().and_then(|bonus| bonus_label(bonus, now)) {
         body.push(BodyRow::Split { left: dim(label), right: Line::default() });
