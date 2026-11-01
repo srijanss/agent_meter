@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use agent_meter::account::{Account, Provider};
 use agent_meter::claude_collector::collect_claude;
@@ -14,11 +15,13 @@ struct Fake {
     auth: Result<Output, CollectorError>,
     usage: Result<Output, CollectorError>,
     calls: RefCell<Vec<CommandSpec>>,
+    limits: RefCell<Vec<Limits>>,
 }
 
 impl CommandRunner for Fake {
-    fn run(&self, spec: &CommandSpec, _limits: &Limits) -> Result<Output, CollectorError> {
+    fn run(&self, spec: &CommandSpec, limits: &Limits) -> Result<Output, CollectorError> {
         self.calls.borrow_mut().push(spec.clone());
+        self.limits.borrow_mut().push(*limits);
         if spec.args().first().map(String::as_str) == Some("auth") {
             self.auth.clone()
         } else {
@@ -47,7 +50,7 @@ fn run(
     auth: Result<Output, CollectorError>,
     usage: Result<Output, CollectorError>,
 ) -> (Result<Snapshot, CollectorError>, Vec<CommandSpec>) {
-    let fake = Fake { auth, usage, calls: RefCell::new(Vec::new()) };
+    let fake = Fake { auth, usage, calls: RefCell::new(Vec::new()), limits: RefCell::new(Vec::new()) };
     let now = Utc.with_ymd_and_hms(2026, 11, 1, 12, 0, 0).unwrap();
     let result = collect_claude(&fake, &account(), now);
     (result, fake.calls.into_inner())
@@ -106,7 +109,7 @@ fn a_failed_process_is_not_trusted_even_with_plausible_output() {
 
 #[test]
 fn a_non_claude_account_never_launches_the_cli() {
-    let fake = Fake { auth: logged_in(), usage: usage_ok(), calls: RefCell::new(Vec::new()) };
+    let fake = Fake { auth: logged_in(), usage: usage_ok(), calls: RefCell::new(Vec::new()), limits: RefCell::new(Vec::new()) };
     let codex = Account { provider: Provider::Codex, ..account() };
     let now = Utc.with_ymd_and_hms(2026, 11, 1, 12, 0, 0).unwrap();
     assert_eq!(collect_claude(&fake, &codex, now), Err(CollectorError::Internal));
@@ -119,10 +122,21 @@ fn a_non_utf8_config_dir_is_refused_not_rewritten() {
     use std::os::unix::ffi::OsStringExt;
     let home = PathBuf::from(std::ffi::OsString::from_vec(b"/cfg/\xff".to_vec()));
     let odd = Account { home, ..account() };
-    let fake = Fake { auth: logged_in(), usage: usage_ok(), calls: RefCell::new(Vec::new()) };
+    let fake = Fake { auth: logged_in(), usage: usage_ok(), calls: RefCell::new(Vec::new()), limits: RefCell::new(Vec::new()) };
     let now = Utc.with_ymd_and_hms(2026, 11, 1, 12, 0, 0).unwrap();
     assert_eq!(collect_claude(&fake, &odd, now), Err(CollectorError::Internal));
     assert!(fake.calls.borrow().is_empty(), "the CLI must not run against a different directory");
+}
+
+#[test]
+fn each_call_is_bounded_by_its_own_timeout_and_output_cap() {
+    let fake = Fake { auth: logged_in(), usage: usage_ok(), calls: RefCell::new(Vec::new()), limits: RefCell::new(Vec::new()) };
+    let now = Utc.with_ymd_and_hms(2026, 11, 1, 12, 0, 0).unwrap();
+    collect_claude(&fake, &account(), now).unwrap();
+    let limits = fake.limits.into_inner();
+    // Auth is quick and small; /usage takes ~15s locally, so it gets headroom.
+    assert_eq!(limits[0], Limits { timeout: Duration::from_secs(10), max_output: 64 * 1024 });
+    assert_eq!(limits[1], Limits { timeout: Duration::from_secs(45), max_output: 1024 * 1024 });
 }
 
 #[test]
