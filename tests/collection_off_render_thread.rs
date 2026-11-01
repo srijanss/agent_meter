@@ -35,11 +35,15 @@ fn a_hung_collection_never_blocks_spawn_or_poll_and_other_accounts_still_land() 
         Err(CollectorError::Unavailable)
     });
     collections.spawn("quick".into(), || Ok(snapshot("quick")));
-    assert!(collections.poll().len() <= 1, "poll never waits for the hung job");
+    // Keep whatever this poll returns: the quick job may already have finished.
+    let mut first = collections.poll();
+    assert!(first.len() <= 1, "poll never waits for the hung job");
     assert!(started.elapsed() < Duration::from_secs(1), "the caller was blocked");
 
     // The quick account's result arrives while the other is still hung.
-    let first = drain(&collections, 1);
+    if first.is_empty() {
+        first = drain(&collections, 1);
+    }
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].0, "quick");
     assert!(matches!(first[0].1, AccountOutcome::Snapshot(_)));
