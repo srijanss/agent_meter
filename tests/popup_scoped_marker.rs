@@ -79,6 +79,31 @@ fn an_unknown_scoped_percent_or_no_scoped_allowance_draws_no_tick() {
 }
 
 #[test]
+fn a_known_scoped_percent_is_shown_even_when_every_parent_percent_is_unknown() {
+    let snapshot = parse_snapshot(
+        r#"{"schema_version":1,"provider":"claude","profile_id":"p","plan_label":"Max",
+        "collected_at":"2026-10-14T00:00:00Z","source":"provider_reported","health":"ok",
+        "windows":[{"id":"w","label":"Weekly","used_percent":null,"resets_at":null,
+          "source":"provider_reported","scoped":[{"label":"Opus","used_percent":50.0}]}],
+        "bonus_resets":null}"#,
+    )
+    .unwrap();
+    let entries = [AccountEntry {
+        account: Account { name: "Main".into(), provider: Provider::Claude, home: PathBuf::from("/x"), active: true },
+        snapshot: Some(snapshot),
+    }];
+    let now = Utc.with_ymd_and_hms(2026, 10, 14, 0, 0, 0).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(48, 10)).unwrap();
+    terminal.draw(|frame| render_popup(frame, &entries, now)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+
+    let weekly = row_of(&buf, "Weekly");
+    let width = meter_cells(&buf, weekly).len();
+    assert_eq!(ticks(&buf, weekly), vec![width / 2]);
+    assert!(!(0..buf.area.height).any(|y| line(&buf, y).contains("unavailable")));
+}
+
+#[test]
 fn a_full_scoped_allowance_stays_inside_the_meter() {
     let buf = render(r#"[{"label":"Opus","used_percent":100.0}]"#);
     let weekly = row_of(&buf, "Weekly");

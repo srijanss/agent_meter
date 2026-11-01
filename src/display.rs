@@ -51,7 +51,7 @@ pub fn account_view(snapshot: &Snapshot, now: DateTime<Utc>) -> AccountView {
             RowView { label: w.label.clone(), fill, reset, scoped }
         })
         .collect();
-    if rows.iter().any(|r| r.fill.is_some()) {
+    if rows.iter().any(|r| r.fill.is_some() || !r.scoped.is_empty()) {
         AccountView::Rows(rows)
     } else {
         AccountView::Unavailable
