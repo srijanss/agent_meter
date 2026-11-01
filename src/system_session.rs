@@ -4,7 +4,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Stdio};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 use std::time::Duration;
 
@@ -18,6 +18,8 @@ const MAX_LINE: usize = 1024 * 1024;
 const MAX_SEND: usize = 16 * 1024;
 /// Lines buffered ahead of `recv`; a flooding child blocks instead of growing memory.
 const QUEUE: usize = 64;
+/// Lines queued for the writer thread; beyond this `send` reports Unavailable.
+const OUTBOX: usize = 8;
 
 pub struct SystemSessionStarter;
 
@@ -52,26 +54,35 @@ impl SessionStarter for SystemSessionStarter {
                 }
             }
         });
-        Ok(Box::new(ProcessSession { child, stdin, lines }))
+        // A writer thread owns stdin, so a child that never reads can only stall
+        // that thread; `send` never waits. Dropping the session kills the group,
+        // which ends a blocked write with EPIPE.
+        let (out, queued) = mpsc::sync_channel::<String>(OUTBOX);
+        thread::spawn(move || {
+            let mut stdin: ChildStdin = stdin;
+            while let Ok(line) = queued.recv() {
+                if writeln!(stdin, "{line}").and_then(|()| stdin.flush()).is_err() {
+                    return;
+                }
+            }
+        });
+        Ok(Box::new(ProcessSession { child, out, lines }))
     }
 }
 
 struct ProcessSession {
     child: Child,
-    stdin: ChildStdin,
+    out: SyncSender<String>,
     lines: Receiver<Result<String, CollectorError>>,
 }
 
 impl LineSession for ProcessSession {
     fn send(&mut self, line: &str) -> Result<(), CollectorError> {
-        // The write is blocking: a line that fits the pipe buffer cannot stall on a
-        // child that is not reading, so anything larger is refused up front.
         if line.len() > MAX_SEND {
             return Err(CollectorError::Internal);
         }
-        writeln!(self.stdin, "{line}")
-            .and_then(|()| self.stdin.flush())
-            .map_err(|_| CollectorError::Unavailable)
+        // Never blocks: a full outbox or a dead writer means the child is not listening.
+        self.out.try_send(line.to_string()).map_err(|_| CollectorError::Unavailable)
     }
 
     fn recv(&mut self, timeout: Duration) -> Result<String, CollectorError> {

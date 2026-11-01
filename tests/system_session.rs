@@ -77,3 +77,19 @@ fn dropping_a_session_kills_the_child_and_its_descendants() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(!alive, "grandchild {pid} survived the session");
 }
+
+#[test]
+fn sending_to_a_child_that_never_reads_never_blocks_and_drop_still_cleans_up() {
+    let mut session = SystemSessionStarter.start(&sh("sleep 60")).unwrap();
+    let line = "x".repeat(16 * 1024);
+    let started = std::time::Instant::now();
+    // Far more than any pipe buffer holds: later sends are refused, none block.
+    let results: Vec<_> = (0..64).map(|_| session.send(&line)).collect();
+    assert!(started.elapsed() < Duration::from_secs(5), "send blocked");
+    assert!(results[0].is_ok());
+    assert!(results.iter().any(Result::is_err), "backlog must be bounded");
+
+    let dropped = std::time::Instant::now();
+    drop(session);
+    assert!(dropped.elapsed() < Duration::from_secs(5), "drop blocked behind a stuck write");
+}
