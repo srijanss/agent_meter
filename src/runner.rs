@@ -67,6 +67,11 @@ impl CommandSpec {
     pub fn args(&self) -> &[String] {
         &self.args
     }
+
+    /// The account variables set for the child (name, value).
+    pub fn environment(&self) -> &[(String, String)] {
+        &self.env
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

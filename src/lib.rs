@@ -17,3 +17,4 @@ pub mod input;
 pub mod claude_usage;
 pub mod codex_limits;
 pub mod outcome;
+pub mod claude_collector;
