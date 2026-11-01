@@ -93,8 +93,12 @@ fn body_rows(entries: &[AccountEntry], now: DateTime<Utc>) -> Vec<BodyRow> {
 }
 
 fn window_rows(entry: &AccountEntry, now: DateTime<Utc>) -> Vec<BodyRow> {
-    let Some(snapshot) = &entry.snapshot else { return Vec::new() };
-    let AccountView::Rows(rows) = account_view(snapshot, now) else { return Vec::new() };
+    // No snapshot yet, or nothing measured: say so rather than show a bare heading.
+    let unavailable = || {
+        vec![BodyRow::Split { left: dim("Usage unavailable".to_string()), right: Line::default() }]
+    };
+    let Some(snapshot) = &entry.snapshot else { return unavailable() };
+    let AccountView::Rows(rows) = account_view(snapshot, now) else { return unavailable() };
     rows.into_iter()
         .map(|row| BodyRow::Window {
             title: row.label,
