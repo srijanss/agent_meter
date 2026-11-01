@@ -105,7 +105,7 @@ pub fn read_capped<R: Read>(reader: R, cap: usize) -> Result<Vec<u8>, CollectorE
 }
 
 /// Kills the child and every descendant in its process group, then reaps it.
-fn terminate(child: &mut Child) {
+pub(crate) fn terminate(child: &mut Child) {
     #[cfg(unix)]
     {
         extern "C" {
@@ -121,25 +121,30 @@ fn terminate(child: &mut Child) {
     let _ = child.wait();
 }
 
+/// A command with a cleared environment (plus the inherited and per-account
+/// allow-list) in its own process group, so the whole tree can be signalled.
+pub(crate) fn configured_command(spec: &CommandSpec) -> Command {
+    let mut command = Command::new(&spec.program);
+    command.args(&spec.args).env_clear();
+    for name in INHERITED_ENV {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    for (name, value) in &spec.env {
+        command.env(name, value);
+    }
+    #[cfg(unix)]
+    command.process_group(0);
+    command
+}
+
 /// Runs real processes.
 pub struct SystemRunner;
 
 impl CommandRunner for SystemRunner {
     fn run(&self, spec: &CommandSpec, limits: &Limits) -> Result<Output, CollectorError> {
-        let mut command = Command::new(&spec.program);
-        command.args(&spec.args).env_clear();
-        for name in INHERITED_ENV {
-            if let Some(value) = std::env::var_os(name) {
-                command.env(name, value);
-            }
-        }
-        for (name, value) in &spec.env {
-            command.env(name, value);
-        }
-        // Its own process group, so the whole tree can be signalled on failure.
-        #[cfg(unix)]
-        command.process_group(0);
-        let mut child = command
+        let mut child = configured_command(spec)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
