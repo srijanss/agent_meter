@@ -131,8 +131,9 @@ fn parse_reset(text: &str, collected_at: DateTime<Utc>) -> Option<DateTime<Utc>>
         };
         let instant = match zone.from_local_datetime(&naive) {
             LocalResult::Single(at) => at,
-            LocalResult::Ambiguous(earliest, _) => earliest,
-            LocalResult::None => return None, // skipped by a DST jump: unknown, not shifted
+            // Skipped by a DST jump, or happening twice: the text does not say
+            // which, so the reset is unknown rather than guessed.
+            LocalResult::Ambiguous(..) | LocalResult::None => return None,
         };
         if instant.with_timezone(&Utc) > collected_at {
             return Some(instant.with_timezone(&Utc));
