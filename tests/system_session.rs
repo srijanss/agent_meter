@@ -71,11 +71,29 @@ fn dropping_a_session_kills_the_child_and_its_descendants() {
     assert_eq!(session.recv(Duration::from_secs(10)).unwrap(), "ready");
     let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
     drop(session);
-    std::thread::sleep(Duration::from_millis(300));
-    let alive = std::path::Path::new(&format!("/proc/{pid}")).exists()
-        && !std::fs::read_to_string(format!("/proc/{pid}/stat")).map(|s| s.contains(") Z")).unwrap_or(true);
+    // Bounded polling: the kill is asynchronous with the reaping of the group.
+    let mut alive = true;
+    for _ in 0..50 {
+        alive = is_alive(pid);
+        if !alive {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
     let _ = std::fs::remove_dir_all(&dir);
     assert!(!alive, "grandchild {pid} survived the session");
+}
+
+/// Portable liveness via `ps`: a missing or zombie process is gone. If `ps`
+/// itself cannot be run the test fails; it never counts as termination.
+fn is_alive(pid: i32) -> bool {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .expect("ps must be runnable to check liveness");
+    let stat = String::from_utf8_lossy(&output.stdout);
+    let stat = stat.trim();
+    !(stat.is_empty() || stat.starts_with('Z'))
 }
 
 #[test]
