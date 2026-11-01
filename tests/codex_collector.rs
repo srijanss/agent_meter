@@ -17,6 +17,7 @@ struct State {
     started: Vec<CommandSpec>,
     sent: Vec<String>,
     replies: VecDeque<Result<String, CollectorError>>,
+    timeouts: Vec<Duration>,
 }
 
 struct Script(Rc<RefCell<State>>);
@@ -34,8 +35,12 @@ impl LineSession for Session {
         self.0.borrow_mut().sent.push(line.to_string());
         Ok(())
     }
-    fn recv(&mut self, _timeout: Duration) -> Result<String, CollectorError> {
-        self.0.borrow_mut().replies.pop_front().unwrap_or(Err(CollectorError::Unavailable))
+    fn recv(&mut self, timeout: Duration) -> Result<String, CollectorError> {
+        // Each line takes a little real time to arrive.
+        std::thread::sleep(Duration::from_millis(5));
+        let mut state = self.0.borrow_mut();
+        state.timeouts.push(timeout);
+        state.replies.pop_front().unwrap_or(Err(CollectorError::Unavailable))
     }
 }
 
@@ -136,4 +141,20 @@ fn only_a_usable_codex_account_starts_a_process() {
         assert_eq!(result, Err(CollectorError::Internal));
         assert!(state.borrow().started.is_empty());
     }
+}
+
+#[test]
+fn one_reply_has_one_deadline_however_many_lines_arrive() {
+    // Noise before the initialize reply: every wait is what is left of the same deadline.
+    let mut replies: Vec<_> = (0..5).map(|_| line(r#"{"method":"noise"}"#)).collect();
+    replies.push(line(INIT_OK));
+    replies.push(line(LIMITS_OK));
+    let (result, state) = collect(replies, &account());
+    assert!(result.is_ok());
+    let timeouts = state.borrow().timeouts.clone();
+    let first_reply = &timeouts[..6];
+    assert!(
+        first_reply.windows(2).all(|pair| pair[1] < pair[0]),
+        "waits must shrink within one reply: {first_reply:?}"
+    );
 }

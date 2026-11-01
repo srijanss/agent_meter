@@ -3,7 +3,7 @@
 //! `account/rateLimits/read`. The session is dropped (and so the child reaped)
 //! on every path out of this function.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
@@ -55,8 +55,14 @@ fn send(session: &mut dyn LineSession, message: &Value) -> Result<(), CollectorE
 /// The `result` of the reply with this id. Notifications and unrelated lines
 /// are skipped, up to a bound.
 fn reply(session: &mut dyn LineSession, id: i64) -> Result<Value, CollectorError> {
+    // One deadline per reply, however many unrelated lines arrive before it.
+    let deadline = Instant::now() + REPLY_TIMEOUT;
     for _ in 0..MAX_LINES_PER_REPLY {
-        let line = session.recv(REPLY_TIMEOUT)?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let line = session.recv(remaining)?;
         let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
         if message.get("id").and_then(Value::as_i64) != Some(id) {
             continue;
