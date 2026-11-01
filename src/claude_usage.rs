@@ -2,7 +2,9 @@
 //!
 //! Anything it cannot read becomes unknown (`None`), never a guess.
 
-use chrono::{DateTime, Datelike, Duration, LocalResult, NaiveDate, TimeZone, Utc};
+use chrono::{
+    DateTime, Datelike, Duration, LocalResult, NaiveDate, NaiveDateTime, Offset, TimeZone, Utc,
+};
 use chrono_tz::Tz;
 
 use crate::snapshot::{Health, ScopedAllowance, Snapshot, Source, Window};
@@ -139,10 +141,10 @@ fn parse_reset(text: &str, collected_at: DateTime<Utc>) -> Option<DateTime<Utc>>
                 }
                 continue;
             }
-            // Skipped by a DST jump. Offsets are under a day, so a wall-clock
-            // time a full day before collection is certainly past.
+            // Skipped by a DST jump: the wall-clock time can be read on the old
+            // or the new clock. Unknown while the later reading could be ahead.
             LocalResult::None => {
-                if naive.and_utc() + Duration::days(1) > collected_at {
+                if skipped_time_latest_reading(&zone, naive) > collected_at {
                     return None;
                 }
                 continue;
@@ -155,11 +157,28 @@ fn parse_reset(text: &str, collected_at: DateTime<Utc>) -> Option<DateTime<Utc>>
     None
 }
 
+/// The later of the two instants a nonexistent (DST-skipped) wall-clock time
+/// could mean: read on the clock before the jump, or on the clock after it.
+fn skipped_time_latest_reading(zone: &Tz, naive: NaiveDateTime) -> DateTime<Utc> {
+    // Offsets just either side of the jump (no zone changes twice in a day).
+    let offset_secs = |probe: NaiveDateTime| zone.offset_from_utc_datetime(&probe).fix().local_minus_utc();
+    let before = offset_secs(naive - Duration::days(1));
+    let after = offset_secs(naive + Duration::days(1));
+    let latest = naive - Duration::seconds(i64::from(before.min(after)));
+    latest.and_utc()
+}
+
+/// Whole-token month names: three-letter abbreviations ("Sept" too) and full names.
 fn month_number(name: &str) -> Option<u32> {
-    const MONTHS: [&str; 12] =
-        ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    let name = name.get(..3)?;
-    MONTHS.iter().position(|m| m.eq_ignore_ascii_case(name)).map(|i| i as u32 + 1)
+    const MONTHS: [&str; 12] = [
+        "january", "february", "march", "april", "may", "june", "july", "august", "september",
+        "october", "november", "december",
+    ];
+    let name = name.trim().to_ascii_lowercase();
+    MONTHS
+        .iter()
+        .position(|full| name == *full || name == full[..3] || (name == "sept" && *full == "september"))
+        .map(|i| i as u32 + 1)
 }
 
 /// Parses `7:40pm`, `10pm`, `12am` into a 24-hour (hour, minute).
