@@ -18,17 +18,17 @@ pub fn window_tooltip(
     stale_after: Duration,
 ) -> Option<Vec<String>> {
     let window = snapshot.windows.get(index)?;
-    let headline = match percent(window.used_percent) {
+    // Usage and reset are independent: either may be known without the other.
+    let usage = match percent(window.used_percent) {
+        Some(used) => format!("{} {used}% used", window.label),
         None => format!("{} usage unknown", window.label),
-        Some(used) => {
-            let reset = match window.resets_at.map(|at| reset_display(at, now)) {
-                Some(ResetDisplay::Remaining(left)) => format!(", resets in {left}"),
-                Some(ResetDisplay::Stale) => ", reset time passed".to_string(),
-                None => String::new(),
-            };
-            format!("{} {used}% used{reset}", window.label)
-        }
     };
+    let reset = match window.resets_at.map(|at| reset_display(at, now)) {
+        Some(ResetDisplay::Remaining(left)) => format!(", resets in {left}"),
+        Some(ResetDisplay::Stale) => ", reset time passed".to_string(),
+        None => String::new(),
+    };
+    let headline = format!("{usage}{reset}");
     let mut lines = vec![headline, format!("Source: {}", source_name(window.source))];
     if let Freshness::Stale { age } = freshness(snapshot, now, stale_after) {
         lines.push(format!("Last updated {age} ago"));

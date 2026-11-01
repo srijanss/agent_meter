@@ -53,6 +53,22 @@ fn unknown_usage_is_never_shown_as_zero_and_a_missing_window_has_no_tooltip() {
 }
 
 #[test]
+fn a_known_reset_is_shown_even_when_usage_is_unknown() {
+    let snap = parse_snapshot(
+        r#"{"schema_version":1,"provider":"claude","profile_id":"p","plan_label":null,
+        "collected_at":"2026-10-14T00:00:00Z","source":"provider_reported","health":"ok",
+        "windows":[{"id":"s","label":"Session","used_percent":null,"resets_at":"2026-10-14T02:30:00Z","source":"unknown"}],
+        "bonus_resets":null}"#,
+    )
+    .unwrap();
+    let lines = window_tooltip(&snap, 0, now(), Duration::minutes(10)).unwrap();
+    assert_eq!(lines[0], "Session usage unknown, resets in 2h 30m");
+    let later = Utc.with_ymd_and_hms(2026, 10, 14, 5, 0, 0).unwrap();
+    let past = window_tooltip(&snap, 0, later, Duration::days(1)).unwrap();
+    assert_eq!(past[0], "Session usage unknown, reset time passed");
+}
+
+#[test]
 fn a_reset_already_in_the_past_is_not_shown_as_a_negative_countdown() {
     let snap = snapshot("2026-10-14T00:00:00Z");
     let later = Utc.with_ymd_and_hms(2026, 10, 18, 0, 0, 0).unwrap();
