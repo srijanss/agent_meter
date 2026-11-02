@@ -27,3 +27,4 @@ pub mod tooltip;
 pub mod collection;
 pub mod app;
 pub mod backoff;
+pub mod history;
