@@ -67,12 +67,36 @@ pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
 
 /// Parses a snapshot, rejecting any schema version other than the supported
 /// one (and, through `Source`, any unknown source) rather than guessing.
+/// Largest collector payload accepted; a real snapshot is a few KiB.
+pub const MAX_SNAPSHOT_BYTES: usize = 256 * 1024;
+
+fn invalid(message: &str) -> serde_json::Error {
+    <serde_json::Error as serde::de::Error>::custom(message)
+}
+
+/// A used share must be a finite number from 0 to 100.
+fn valid_percent(percent: Option<f64>) -> bool {
+    percent.is_none_or(|p| p.is_finite() && (0.0..=100.0).contains(&p))
+}
+
+/// Parses a snapshot from collector output, which is untrusted: an oversized
+/// payload, an unsupported schema version or an unknown source, a wrong type,
+/// a timestamp without a timezone, or a percentage outside 0..=100 is an error,
+/// never a guessed value.
 pub fn parse_snapshot(json: &str) -> Result<Snapshot, serde_json::Error> {
+    if json.len() > MAX_SNAPSHOT_BYTES {
+        return Err(invalid("snapshot is too large"));
+    }
     let snapshot: Snapshot = serde_json::from_str(json)?;
     if snapshot.schema_version != SUPPORTED_SCHEMA_VERSION {
-        return Err(<serde_json::Error as serde::de::Error>::custom(
-            "unsupported schema_version",
-        ));
+        return Err(invalid("unsupported schema_version"));
+    }
+    let percents_valid = snapshot.windows.iter().all(|window| {
+        valid_percent(window.used_percent)
+            && window.scoped.iter().all(|scoped| valid_percent(scoped.used_percent))
+    });
+    if !percents_valid {
+        return Err(invalid("used_percent must be from 0 to 100"));
     }
     Ok(snapshot)
 }
