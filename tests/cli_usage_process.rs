@@ -44,6 +44,50 @@ fn bad_arguments_or_config_exit_2_with_nothing_on_stdout() {
     let _ = fs::remove_dir_all(&home);
 }
 
+/// A stand-in `codex app-server` that answers the two requests the collector sends.
+fn install_fake_codex(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let script = dir.join("codex");
+    fs::write(
+        &script,
+        "#!/bin/sh\n\
+         while read -r line; do\n\
+           case \"$line\" in\n\
+             *'\"id\":1'*) echo '{\"id\":1,\"result\":{}}' ;;\n\
+             *'\"id\":2'*) echo '{\"id\":2,\"result\":{\"rateLimits\":{\"planType\":\"plus\",\"primary\":{\"usedPercent\":25,\"windowDurationMins\":300,\"resetsAt\":1900000000}}}}' ;;\n\
+           esac\n\
+         done\n",
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn a_partial_report_is_one_json_line_with_exit_0_and_nothing_else_on_stdout() {
+    let home = dir("partial");
+    install_fake_codex(&home);
+    let config = home.join("config.toml");
+    fs::write(
+        &config,
+        "[accounts.work]\nprovider = \"codex\"\n[accounts.broken]\nprovider = \"claude\"\n",
+    )
+    .unwrap();
+
+    let out = run(&home, &["usage", "--json", "--config", config.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0), "{:?}", String::from_utf8_lossy(&out.stderr));
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(!text.contains('\u{1b}'), "no terminal escapes: {text:?}");
+    assert_eq!(text.matches('\n').count(), 1, "one line: {text:?}");
+    assert!(text.ends_with('\n'));
+    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let accounts = value["accounts"].as_array().unwrap();
+    let find = |name: &str| accounts.iter().find(|a| a["name"] == name).unwrap();
+    assert_eq!(find("work")["snapshot"]["provider"], "codex");
+    assert_eq!(find("work")["snapshot"]["windows"][0]["used_percent"], 25.0);
+    assert!(find("broken")["snapshot"].is_null());
+    let _ = fs::remove_dir_all(&home);
+}
+
 #[test]
 fn no_account_reporting_exits_4_with_nothing_on_stdout() {
     let home = dir("ok");
