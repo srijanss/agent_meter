@@ -8,6 +8,8 @@ use std::fmt;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
@@ -115,6 +117,44 @@ pub fn system_jobs() -> JobFactory {
     })
 }
 
+/// Batches waiting for the history writer; a stuck history drops later ones
+/// (reported as a notice) rather than growing without bound.
+const HISTORY_QUEUE: usize = 8;
+
+/// Records snapshots on its own thread, so a slow or locked history file never
+/// stalls the popup. Failures come back through `failures`.
+struct HistoryWriter {
+    batches: SyncSender<Vec<Snapshot>>,
+    results: Receiver<bool>,
+}
+
+impl HistoryWriter {
+    fn start(store: HistoryStore) -> Self {
+        let (batches, queued) = mpsc::sync_channel::<Vec<Snapshot>>(HISTORY_QUEUE);
+        let (done, results) = mpsc::channel();
+        let spawned = thread::Builder::new().name("history".into()).spawn(move || {
+            for batch in queued {
+                if done.send(store.record_all(&batch).is_ok()).is_err() {
+                    break;
+                }
+            }
+        });
+        // Without a thread nothing is ever recorded; `submit` then reports it.
+        drop(spawned);
+        Self { batches, results }
+    }
+
+    /// Queues `snapshots` and returns at once; false if they could not be queued.
+    fn submit(&self, snapshots: Vec<Snapshot>) -> bool {
+        snapshots.is_empty() || self.batches.try_send(snapshots).is_ok()
+    }
+
+    /// Whether any recording finished with an error since the last call.
+    fn failures(&self) -> bool {
+        self.results.try_iter().any(|ok| !ok)
+    }
+}
+
 pub struct App {
     config_path: PathBuf,
     user_home: PathBuf,
@@ -123,7 +163,7 @@ pub struct App {
     collections: Collections,
     jobs: JobFactory,
     /// Where each completed refresh is recorded; `None` when history is off.
-    history: Option<HistoryStore>,
+    history: Option<HistoryWriter>,
     hover: Option<Position>,
     notice: Option<String>,
     scroll: usize,
@@ -146,7 +186,7 @@ impl App {
             .collect();
         let history = parse_history_config(&read_config(&config_path)?, user_home)
             .map_err(|e| AppError::new(e.to_string()))?
-            .map(|config| config.store());
+            .map(|config| HistoryWriter::start(config.store()));
         Ok(Self {
             history,
             config_path,
@@ -232,6 +272,7 @@ impl App {
     /// Takes in finished collections. A failure leaves the account's last good
     /// data in place rather than clearing it.
     pub fn poll(&mut self, now: Instant) {
+        let mut reported = Vec::new();
         for (name, outcome) in self.collections.poll() {
             self.gate.finish(&name, now);
             if let Some(backoff) = &mut self.auto_refresh {
@@ -240,12 +281,13 @@ impl App {
             if let (AccountOutcome::Snapshot(snapshot), Some(entry)) =
                 (outcome, self.entries.iter_mut().find(|e| e.account.name == name))
             {
-                if let Some(store) = &self.history {
-                    if store.record(&snapshot).is_err() {
-                        self.notice = Some(HISTORY_FAILED.to_string());
-                    }
-                }
+                reported.push(snapshot.clone());
                 entry.snapshot = Some(snapshot);
+            }
+        }
+        if let Some(history) = &self.history {
+            if !history.submit(reported) || history.failures() {
+                self.notice = Some(HISTORY_FAILED.to_string());
             }
         }
     }
