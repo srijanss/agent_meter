@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use crate::account::{is_clean, ConfigError};
+use crate::account::{is_clean, ConfigError, Provider};
+use crate::popup::AccountEntry;
 
 /// The coding harness a profile runs under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -66,4 +67,35 @@ pub fn parse_model_profiles(toml_text: &str) -> Result<Vec<ModelProfile>, Config
             Ok(ModelProfile { name, harness: p.harness, model: p.model, thinking: p.thinking, provider: p.provider })
         })
         .collect()
+}
+
+/// Where a profile's usage comes from.
+#[derive(Debug, Clone, Copy)]
+pub enum Quota<'a> {
+    /// The provider's active account; its snapshot is the profile's usage.
+    Account(&'a AccountEntry),
+    /// No active account for the provider.
+    Unknown,
+}
+
+impl Quota<'_> {
+    pub fn label(&self) -> &str {
+        match self {
+            Quota::Account(entry) => &entry.account.name,
+            Quota::Unknown => "Quota unknown",
+        }
+    }
+}
+
+/// A profile's usage is its provider's active account, whatever the harness:
+/// the harness is never a quota source, so profiles never double-count.
+pub fn quota_for<'a>(profile: &ModelProfile, entries: &'a [AccountEntry]) -> Quota<'a> {
+    let provider = match profile.provider {
+        ModelProvider::Anthropic => Provider::Claude,
+        ModelProvider::Openai => Provider::Codex,
+    };
+    entries
+        .iter()
+        .find(|entry| entry.account.provider == provider && entry.account.active)
+        .map_or(Quota::Unknown, Quota::Account)
 }
