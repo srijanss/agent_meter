@@ -64,6 +64,21 @@ pub fn render_popup_status(
     hover: Option<Position>,
     notice: Option<&str>,
 ) {
+    render_popup_scrolled(frame, entries, now, refreshing, hover, notice, 0);
+}
+
+/// Like `render_popup_status`, with the body scrolled down by `scroll` rows.
+/// A `scroll` past the end shows the last page. The header, border and notice
+/// stay in place.
+pub fn render_popup_scrolled(
+    frame: &mut Frame,
+    entries: &[AccountEntry],
+    now: DateTime<Utc>,
+    refreshing: bool,
+    hover: Option<Position>,
+    notice: Option<&str>,
+    scroll: usize,
+) {
     let block = Block::bordered().border_style(Style::new().fg(ACCENT));
     frame.render_widget(block, frame.area());
 
@@ -76,9 +91,10 @@ pub fn render_popup_status(
         render_notice(frame, status, notice);
     }
     let rows = body_rows(entries, now);
-    render_body(frame, body, &rows);
+    let scroll = scroll.min(rows.len().saturating_sub(body.height as usize));
+    render_body(frame, body, &rows[scroll..]);
     if let Some(at) = hover.filter(|at| body.contains(*at)) {
-        if let Some(BodyRow::Window { tip, .. }) = rows.get((at.y - body.y) as usize) {
+        if let Some(BodyRow::Window { tip, .. }) = rows.get(scroll + (at.y - body.y) as usize) {
             render_tooltip(frame, at.y, body.x, tip);
         }
     }
@@ -156,6 +172,21 @@ pub fn refresh_button(area: Rect) -> Rect {
         (_, Some(buttons)) => Rect::new(buttons.x, buttons.y, 3, 1),
         (_, None) => Rect::default(),
     }
+}
+
+/// How far the body can scroll: the rows that do not fit below the header.
+/// A `notice` takes the bottom body row, so it adds one.
+pub fn max_scroll(area: Rect, entries: &[AccountEntry], now: DateTime<Utc>, has_notice: bool) -> usize {
+    let mut visible = regions(area)[2].height as usize;
+    if has_notice {
+        visible = visible.saturating_sub(1);
+    }
+    body_rows(entries, now).len().saturating_sub(visible)
+}
+
+/// Rows one PageUp/PageDown moves: the body height, at least one.
+pub fn page_size(area: Rect) -> usize {
+    (regions(area)[2].height as usize).max(1)
 }
 
 /// One line of the popup body.
@@ -282,10 +313,22 @@ pub struct UseLink {
 /// The Use links of a popup drawn in `area`, top to bottom. Hit-testing and
 /// the number keys both read this, so they match what is drawn.
 pub fn use_links(area: Rect, entries: &[AccountEntry], now: DateTime<Utc>) -> Vec<UseLink> {
+    use_links_scrolled(area, entries, now, 0)
+}
+
+/// Like `use_links`, for a body scrolled down by `scroll` rows: links scrolled
+/// out of view are left out.
+pub fn use_links_scrolled(
+    area: Rect,
+    entries: &[AccountEntry],
+    now: DateTime<Utc>,
+    scroll: usize,
+) -> Vec<UseLink> {
     let body = regions(area)[2];
     let width = USE_LABEL.len() as u16;
     body_rows(entries, now)
         .iter()
+        .skip(scroll)
         .take(body.height as usize)
         .enumerate()
         .filter_map(|(offset, row)| match row {

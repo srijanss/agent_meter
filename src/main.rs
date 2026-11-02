@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use agent_meter::app::{default_config_path, parse_args, system_jobs, App};
-use agent_meter::popup::render_popup_status;
+use agent_meter::popup::render_popup_scrolled;
 use agent_meter::terminal::{run_in_terminal, CrosstermRawMode};
 use chrono::Utc;
 use crossterm::event;
@@ -56,13 +56,14 @@ fn event_loop<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     while !app.should_quit() {
         app.poll(Instant::now());
         terminal.draw(|frame| {
-            render_popup_status(
+            render_popup_scrolled(
                 frame,
                 app.entries(),
                 Utc::now(),
                 app.refreshing(),
                 app.hover(),
                 app.notice(),
+                app.scroll(),
             );
         })?;
         if event::poll(TICK)? {

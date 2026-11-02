@@ -19,8 +19,8 @@ use crate::claude_collector::collect_claude;
 use crate::codex_collector::collect_codex;
 use crate::collection::Collections;
 use crate::failure::{AccountOutcome, CollectorError};
-use crate::input::{action_in, Action};
-use crate::popup::AccountEntry;
+use crate::input::{action_scrolled, Action};
+use crate::popup::{max_scroll, AccountEntry};
 use crate::refresh::{accounts_to_refresh, RefreshGate};
 use crate::runner::SystemRunner;
 use crate::snapshot::Snapshot;
@@ -108,6 +108,7 @@ pub struct App {
     jobs: JobFactory,
     hover: Option<Position>,
     notice: Option<String>,
+    scroll: usize,
     quit: bool,
 }
 
@@ -133,6 +134,7 @@ impl App {
             jobs,
             hover: None,
             notice: None,
+            scroll: 0,
             quit: false,
         })
     }
@@ -154,6 +156,11 @@ impl App {
     /// action. Fixed text: it never carries config values or paths.
     pub fn notice(&self) -> Option<&str> {
         self.notice.as_deref()
+    }
+
+    /// Rows the content is scrolled down by; draw with this offset.
+    pub fn scroll(&self) -> usize {
+        self.scroll
     }
 
     pub fn should_quit(&self) -> bool {
@@ -198,11 +205,15 @@ impl App {
             let at = Position::new(*column, *row);
             self.hover = area.contains(at).then_some(at);
         }
-        let action = action_in(event, area, &self.entries, now_utc);
+        let action = action_scrolled(event, area, &self.entries, now_utc, self.scroll);
         if action.is_some() {
             self.notice = None;
         }
         match action {
+            Some(Action::Scroll(rows)) => {
+                let max = max_scroll(area, &self.entries, now_utc, false);
+                self.scroll = self.scroll.saturating_add_signed(rows).min(max);
+            }
             Some(Action::Close) => self.quit = true,
             Some(Action::Refresh) => self.refresh(now),
             Some(Action::Use(name)) => {

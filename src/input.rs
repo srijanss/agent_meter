@@ -6,7 +6,7 @@ use ratatui::layout::{Position, Rect};
 
 use chrono::{DateTime, Utc};
 
-use crate::popup::{close_button, refresh_button, use_links, AccountEntry};
+use crate::popup::{close_button, page_size, refresh_button, use_links_scrolled, AccountEntry};
 
 /// What the popup should do in response to an event.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,7 +17,12 @@ pub enum Action {
     Refresh,
     /// Mark the named account as the one in use for its provider.
     Use(String),
+    /// Move the popup's content by this many rows (negative is up).
+    Scroll(isize),
 }
+
+/// Rows a mouse wheel step moves the content.
+const WHEEL_ROWS: isize = 3;
 
 /// The action for `event` on a popup drawn in `area`, if any.
 ///
@@ -53,10 +58,40 @@ pub fn action_in(
     entries: &[AccountEntry],
     now: DateTime<Utc>,
 ) -> Option<Action> {
+    action_scrolled(event, area, entries, now, 0)
+}
+
+/// Like `action_in` for a popup whose content is scrolled down by `scroll`
+/// rows: Use links are those visible at that offset, and the wheel, arrow and
+/// page keys ask to scroll.
+pub fn action_scrolled(
+    event: &Event,
+    area: Rect,
+    entries: &[AccountEntry],
+    now: DateTime<Utc>,
+    scroll: usize,
+) -> Option<Action> {
     if let Some(action) = action_for(event, area) {
         return Some(action);
     }
-    let links = use_links(area, entries, now);
+    let page = page_size(area) as isize;
+    match event {
+        Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => {
+            return Some(Action::Scroll(WHEEL_ROWS));
+        }
+        Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => {
+            return Some(Action::Scroll(-WHEEL_ROWS));
+        }
+        Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+            KeyCode::Down => return Some(Action::Scroll(1)),
+            KeyCode::Up => return Some(Action::Scroll(-1)),
+            KeyCode::PageDown => return Some(Action::Scroll(page)),
+            KeyCode::PageUp => return Some(Action::Scroll(-page)),
+            _ => {}
+        },
+        _ => {}
+    }
+    let links = use_links_scrolled(area, entries, now, scroll);
     match event {
         Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => links
             .into_iter()
