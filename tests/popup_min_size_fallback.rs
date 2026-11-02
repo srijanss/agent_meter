@@ -7,14 +7,18 @@ use ratatui::layout::Rect;
 use ratatui::Terminal;
 
 fn header(width: u16, height: u16) -> String {
+    header_buf(width, height).0
+}
+
+fn header_buf(width: u16, height: u16) -> (String, ratatui::buffer::Buffer) {
     let now = Utc.with_ymd_and_hms(2026, 10, 14, 0, 0, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|frame| render_popup(frame, &[], now)).unwrap();
     let buf = terminal.backend().buffer().clone();
     if height < 3 {
-        return String::new();
+        return (String::new(), buf);
     }
-    (0..width).map(|x| buf[(x, 1)].symbol()).collect()
+    ((0..width).map(|x| buf[(x, 1)].symbol()).collect(), buf)
 }
 
 fn click(column: u16, row: u16) -> Event {
@@ -35,7 +39,7 @@ fn at_any_size_the_buttons_are_whole_or_absent_and_the_keys_still_work() {
     for width in 0..=40u16 {
         for height in 0..=8u16 {
             let area = Rect::new(0, 0, width, height);
-            let text = header(width, height);
+            let (text, buf) = header_buf(width, height);
             let (refresh, close) = (refresh_button(area), close_button(area));
             let drawn = text.contains('↻') && text.contains('×');
 
@@ -51,6 +55,14 @@ fn at_any_size_the_buttons_are_whole_or_absent_and_the_keys_still_work() {
                 assert_eq!(cells[refresh.x as usize + 1], '↻', "{width}x{height}: {text:?}");
                 assert_eq!(cells[close.x as usize + 1], '×', "{width}x{height}: {text:?}");
                 assert!(refresh.right() <= close.x, "{width}x{height}");
+                // All three cells of each button are drawn with the button background.
+                let bg = buf[(refresh.x, 1)].bg;
+                assert_ne!(bg, ratatui::style::Color::Reset, "{width}x{height}");
+                for (button, glyph) in [(refresh, "↻"), (close, "×")] {
+                    let symbols: Vec<&str> = (button.x..button.right()).map(|x| buf[(x, 1)].symbol()).collect();
+                    assert_eq!(symbols, [" ", glyph, " "], "{width}x{height}");
+                    assert!((button.x..button.right()).all(|x| buf[(x, 1)].bg == bg), "{width}x{height}");
+                }
             } else {
                 assert_eq!((refresh.area(), close.area()), (0, 0), "{width}x{height}");
             }
