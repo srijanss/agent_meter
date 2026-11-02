@@ -15,6 +15,7 @@ fn snapshot_with_reset(resets_at: &str) -> String {
 #[test]
 fn offsets_in_source_timestamps_normalize_to_the_same_instant() {
     let utc = parse_snapshot(&snapshot_with_reset("2026-10-14T05:00:00Z")).unwrap();
+    assert_eq!(utc.windows[0].resets_at, Some(Utc.with_ymd_and_hms(2026, 10, 14, 5, 0, 0).unwrap()));
     for same in ["2026-10-14T15:00:00+10:00", "2026-10-13T22:00:00-07:00", "2026-10-14T10:30:00+05:30"] {
         let other = parse_snapshot(&snapshot_with_reset(same)).unwrap();
         assert_eq!(other.windows[0].resets_at, utc.windows[0].resets_at, "{same}");
