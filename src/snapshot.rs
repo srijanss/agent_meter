@@ -62,6 +62,17 @@ pub struct Snapshot {
     pub bonus_resets: Option<BonusResets>,
 }
 
+/// The only schema version this build understands.
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
+
+/// Parses a snapshot, rejecting any schema version other than the supported
+/// one (and, through `Source`, any unknown source) rather than guessing.
 pub fn parse_snapshot(json: &str) -> Result<Snapshot, serde_json::Error> {
-    serde_json::from_str(json)
+    let snapshot: Snapshot = serde_json::from_str(json)?;
+    if snapshot.schema_version != SUPPORTED_SCHEMA_VERSION {
+        return Err(<serde_json::Error as serde::de::Error>::custom(
+            "unsupported schema_version",
+        ));
+    }
+    Ok(snapshot)
 }
