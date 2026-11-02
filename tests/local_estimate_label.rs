@@ -68,6 +68,7 @@ fn an_estimate_window_with_only_scoped_usage_is_still_labelled() {
 
 #[test]
 fn the_estimate_marker_stays_on_the_meter_row_when_the_note_is_clipped() {
+    use agent_meter::popup::render_popup_scrolled;
     let snapshot = parse_snapshot(
         r#"{"schema_version":1,"provider":"codex","profile_id":"p","plan_label":null,
         "collected_at":"2026-10-14T00:00:00Z","source":"local_estimate","health":"ok",
@@ -80,15 +81,26 @@ fn the_estimate_marker_stays_on_the_meter_row_when_the_note_is_clipped() {
         snapshot: Some(snapshot),
     }];
     let now = Utc.with_ymd_and_hms(2026, 10, 14, 0, 0, 0).unwrap();
-    for height in 4..=8u16 {
-        let mut terminal = Terminal::new(TestBackend::new(48, height)).unwrap();
-        terminal.draw(|frame| render_popup(frame, &entries, now)).unwrap();
-        let buf = terminal.backend().buffer().clone();
-        let lines: Vec<String> = (0..buf.area.height)
-            .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect())
-            .collect();
-        if let Some(row) = lines.iter().find(|l| l.contains("Weekly")) {
-            assert!(row.contains("~Weekly"), "height {height}: {row:?}");
+    let mut clipped_cases = 0;
+    for height in 4..=10u16 {
+        for scroll in 0..4usize {
+            let mut terminal = Terminal::new(TestBackend::new(48, height)).unwrap();
+            terminal
+                .draw(|frame| render_popup_scrolled(frame, &entries, now, false, None, None, scroll))
+                .unwrap();
+            let buf = terminal.backend().buffer().clone();
+            let lines: Vec<String> = (0..buf.area.height)
+                .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect())
+                .collect();
+            let meter = lines.iter().find(|l| l.contains("Weekly"));
+            let note = lines.iter().any(|l| l.contains("local estimate"));
+            if let Some(row) = meter {
+                assert!(row.contains("~Weekly"), "height {height} scroll {scroll}: {row:?}");
+                if !note {
+                    clipped_cases += 1;
+                }
+            }
         }
     }
+    assert!(clipped_cases > 0, "no case showed the meter with its note clipped");
 }
