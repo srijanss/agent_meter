@@ -19,7 +19,7 @@ use crate::claude_collector::collect_claude;
 use crate::codex_collector::collect_codex;
 use crate::collection::Collections;
 use crate::failure::{AccountOutcome, CollectorError};
-use crate::input::{action_scrolled, Action};
+use crate::input::{action_viewed, Action};
 use crate::popup::{max_scroll, AccountEntry};
 use crate::refresh::{accounts_to_refresh, RefreshGate};
 use crate::runner::SystemRunner;
@@ -205,7 +205,8 @@ impl App {
             let at = Position::new(*column, *row);
             self.hover = area.contains(at).then_some(at);
         }
-        let action = action_scrolled(event, area, &self.entries, now_utc, self.scroll);
+        let has_notice = self.notice.is_some();
+        let action = action_viewed(event, area, &self.entries, now_utc, self.scroll, has_notice);
         if action.is_some() {
             self.notice = None;
         }

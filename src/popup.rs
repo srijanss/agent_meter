@@ -324,14 +324,27 @@ pub fn use_links_scrolled(
     now: DateTime<Utc>,
     scroll: usize,
 ) -> Vec<UseLink> {
+    use_links_viewed(area, entries, now, scroll, false)
+}
+
+/// Like `use_links_scrolled`, for a popup that may show a notice: the notice
+/// takes the bottom body row, so a link under it is neither drawn nor offered.
+pub fn use_links_viewed(
+    area: Rect,
+    entries: &[AccountEntry],
+    now: DateTime<Utc>,
+    scroll: usize,
+    has_notice: bool,
+) -> Vec<UseLink> {
     let body = regions(area)[2];
     let width = USE_LABEL.len() as u16;
     let rows = body_rows(entries, now);
+    let visible = (body.height as usize).saturating_sub(usize::from(has_notice));
     // Drawing clamps an offset past the end, so hit-testing must too.
-    let scroll = scroll.min(rows.len().saturating_sub(body.height as usize));
+    let scroll = scroll.min(rows.len().saturating_sub(visible));
     rows.iter()
         .skip(scroll)
-        .take(body.height as usize)
+        .take(visible)
         .enumerate()
         .filter_map(|(offset, row)| match row {
             BodyRow::Account { use_for: Some(account), .. } if body.width >= width => Some(UseLink {

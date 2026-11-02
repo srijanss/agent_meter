@@ -6,7 +6,7 @@ use ratatui::layout::{Position, Rect};
 
 use chrono::{DateTime, Utc};
 
-use crate::popup::{close_button, page_size, refresh_button, use_links_scrolled, AccountEntry};
+use crate::popup::{close_button, page_size, refresh_button, use_links_viewed, AccountEntry};
 
 /// What the popup should do in response to an event.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +71,19 @@ pub fn action_scrolled(
     now: DateTime<Utc>,
     scroll: usize,
 ) -> Option<Action> {
+    action_viewed(event, area, entries, now, scroll, false)
+}
+
+/// Like `action_scrolled` for a popup that may show a notice, which covers the
+/// bottom body row: a Use link under it cannot be chosen.
+pub fn action_viewed(
+    event: &Event,
+    area: Rect,
+    entries: &[AccountEntry],
+    now: DateTime<Utc>,
+    scroll: usize,
+    has_notice: bool,
+) -> Option<Action> {
     if let Some(action) = action_for(event, area) {
         return Some(action);
     }
@@ -91,7 +104,7 @@ pub fn action_scrolled(
         },
         _ => {}
     }
-    let links = use_links_scrolled(area, entries, now, scroll);
+    let links = use_links_viewed(area, entries, now, scroll, has_notice);
     match event {
         Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => links
             .into_iter()
