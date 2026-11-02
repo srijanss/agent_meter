@@ -13,8 +13,9 @@ use crate::display::{account_view, bonus_label, AccountView};
 use crate::snapshot::Snapshot;
 use crate::tooltip::window_tooltip;
 
-/// A tooltip notes how old the data is once it is older than this.
-const STALE_AFTER: Duration = Duration::minutes(30);
+/// A tooltip notes how old the data is once it is older than this. The JSON
+/// report's `age_seconds` is meant to be compared against it.
+pub const STALE_AFTER: Duration = Duration::minutes(30);
 
 /// Border and button accent.
 const ACCENT: Color = Color::Rgb(232, 163, 23);
