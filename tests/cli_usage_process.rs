@@ -51,6 +51,11 @@ fn a_failed_collector_still_yields_one_json_document_with_a_null_snapshot() {
     fs::write(&config, "[accounts.work]\nprovider = \"claude\"\n").unwrap();
 
     let out = run(&home, &["usage", "--json", "--config", config.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "a collector failure is still a successful report: {:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let text = String::from_utf8(out.stdout).unwrap();
     assert!(!text.contains('\u{1b}'), "no terminal escapes: {text:?}");
     assert_eq!(text.matches('\n').count(), 1, "one line: {text:?}");
