@@ -108,10 +108,17 @@ impl HistoryStore {
         }
 
         // A fresh, never-before-existing file: nothing planted at a guessable
-        // name is followed or inherited.
-        let temp = self.sibling(&format!("{}.{}.tmp", std::process::id(), next_nonce()));
+        // name is followed or inherited, and only a file this call created is
+        // ever removed.
+        let (mut file, temp) = loop {
+            let temp = self.sibling(&format!("{}.{}.tmp", std::process::id(), next_nonce()));
+            match OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temp) {
+                Ok(file) => break (file, temp),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        };
         let written = (|| {
-            let mut file = OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temp)?;
             file.write_all(text.as_bytes())?;
             file.sync_all()?;
             fs::rename(&temp, &self.path)

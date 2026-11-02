@@ -173,3 +173,35 @@ fn retention_bounds_of_zero_and_one_are_honoured() {
     assert_eq!(kept[0].windows[0].used_percent, Some(2.0));
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_failed_replacement_keeps_the_original_and_a_later_record_succeeds() {
+    let dir = dir("failed_replace");
+    let path = dir.join("history.jsonl");
+    let store = HistoryStore::new(path.clone(), 10);
+    store.record(&snapshot("work", "provider_reported", 1, 1.0)).unwrap();
+    let before = fs::read(&path).unwrap();
+
+    // A directory that refuses new files makes the replacement fail.
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o500)).unwrap();
+    let failed = store.record(&snapshot("work", "provider_reported", 2, 2.0));
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+
+    if failed.is_ok() {
+        // Running with privileges that ignore directory permissions (root).
+        let _ = fs::remove_dir_all(&dir);
+        return;
+    }
+    assert_eq!(fs::read(&path).unwrap(), before, "the original is byte-for-byte intact");
+    store.record(&snapshot("work", "provider_reported", 3, 3.0)).unwrap();
+    assert_eq!(store.load().len(), 2);
+    let leftovers: Vec<_> = fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name != "history.jsonl" && name != "history.jsonl.lock")
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+
+    // A temporary file this call never created is never removed by it.
+    let _ = fs::remove_dir_all(&dir);
+}
