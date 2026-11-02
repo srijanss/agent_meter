@@ -20,6 +20,7 @@ use crate::claude_collector::collect_claude;
 use crate::codex_collector::collect_codex;
 use crate::collection::Collections;
 use crate::failure::{AccountOutcome, CollectorError};
+use crate::history::{parse_history_config, HistoryStore};
 use crate::input::{action_viewed, Action};
 use crate::popup::{max_scroll, AccountEntry};
 use crate::refresh::{accounts_to_refresh, RefreshGate};
@@ -47,6 +48,9 @@ impl std::error::Error for AppError {}
 
 /// Shown when choosing an account fails; the cause stays out of the popup.
 const SWITCH_FAILED: &str = "Could not switch account; check the config file";
+
+/// Shown when a snapshot could not be added to the history; the cause stays out.
+const HISTORY_FAILED: &str = "Could not record usage history; check the history path";
 
 pub const USAGE: &str =
     "usage: herdr-agents [--config PATH] | herdr-agents usage --json [--config PATH]";
@@ -118,6 +122,8 @@ pub struct App {
     gate: RefreshGate,
     collections: Collections,
     jobs: JobFactory,
+    /// Where each completed refresh is recorded; `None` when history is off.
+    history: Option<HistoryStore>,
     hover: Option<Position>,
     notice: Option<String>,
     scroll: usize,
@@ -138,7 +144,11 @@ impl App {
             .into_iter()
             .map(|account| AccountEntry { account, snapshot: None })
             .collect();
+        let history = parse_history_config(&read_config(&config_path)?, user_home)
+            .map_err(|e| AppError::new(e.to_string()))?
+            .map(|config| config.store());
         Ok(Self {
+            history,
             config_path,
             user_home: user_home.to_path_buf(),
             entries,
@@ -230,6 +240,11 @@ impl App {
             if let (AccountOutcome::Snapshot(snapshot), Some(entry)) =
                 (outcome, self.entries.iter_mut().find(|e| e.account.name == name))
             {
+                if let Some(store) = &self.history {
+                    if store.record(&snapshot).is_err() {
+                        self.notice = Some(HISTORY_FAILED.to_string());
+                    }
+                }
                 entry.snapshot = Some(snapshot);
             }
         }
