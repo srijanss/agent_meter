@@ -103,3 +103,73 @@ fn each_window_keeps_its_own_source_even_inside_a_provider_reported_snapshot() {
     assert_eq!(windows[1].source, Source::LocalEstimate);
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn concurrent_recorders_lose_no_records_and_leave_no_temporary_files() {
+    let dir = dir("concurrent");
+    let path = dir.join("history.jsonl");
+    let handles: Vec<_> = (0..8)
+        .map(|worker| {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                let store = HistoryStore::new(path, 1000);
+                for n in 0..5 {
+                    store.record(&snapshot("work", "provider_reported", worker, n as f64)).unwrap();
+                }
+            })
+        })
+        .collect();
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    let text = fs::read_to_string(&path).unwrap();
+    assert_eq!(text.lines().count(), 40, "every record survives, none is torn");
+    assert_eq!(HistoryStore::new(path, 1000).load().len(), 40);
+    let leftovers: Vec<_> = fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name != "history.jsonl" && name != "history.jsonl.lock")
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_unreadable_history_is_never_replaced_by_a_single_record() {
+    let dir = dir("unreadable");
+    let path = dir.join("history.jsonl");
+    let store = HistoryStore::new(path.clone(), 10);
+    store.record(&snapshot("work", "provider_reported", 1, 1.0)).unwrap();
+
+    // One line of invalid UTF-8 costs only that line.
+    let mut bytes = fs::read(&path).unwrap();
+    bytes.extend_from_slice(b"\xff\xfe\n");
+    fs::write(&path, bytes).unwrap();
+    assert_eq!(store.load().len(), 1);
+    store.record(&snapshot("work", "provider_reported", 2, 2.0)).unwrap();
+    assert_eq!(store.load().len(), 2, "the earlier record survives");
+
+    // A history that cannot be read at all is an error, never an empty start.
+    let unreadable = dir.join("as_directory");
+    fs::create_dir(&unreadable).unwrap();
+    let broken = HistoryStore::new(unreadable.clone(), 10);
+    assert!(broken.record(&snapshot("work", "provider_reported", 3, 3.0)).is_err());
+    assert!(unreadable.is_dir());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn retention_bounds_of_zero_and_one_are_honoured() {
+    let dir = dir("edges");
+    let none = HistoryStore::new(dir.join("none.jsonl"), 0);
+    none.record(&snapshot("work", "provider_reported", 1, 1.0)).unwrap();
+    assert!(none.load().is_empty());
+
+    let one = HistoryStore::new(dir.join("one.jsonl"), 1);
+    one.record(&snapshot("work", "provider_reported", 1, 1.0)).unwrap();
+    one.record(&snapshot("work", "provider_reported", 2, 2.0)).unwrap();
+    let kept = one.load();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].windows[0].used_percent, Some(2.0));
+    let _ = fs::remove_dir_all(&dir);
+}
