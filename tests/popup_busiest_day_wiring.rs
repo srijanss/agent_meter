@@ -10,7 +10,7 @@ use agent_meter::app::{App, JobFactory};
 use agent_meter::history::HistoryStore;
 use agent_meter::popup::{render_popup_full, render_popup_scrolled};
 use agent_meter::snapshot::{parse_snapshot, Snapshot};
-use chrono::{TimeZone, Utc, Weekday};
+use chrono::{DateTime, Datelike, Local, TimeZone, Utc, Weekday};
 use ratatui::backend::TestBackend;
 use ratatui::layout::Position;
 use ratatui::Terminal;
@@ -28,8 +28,13 @@ fn config(dir: &Path, history: &str) -> PathBuf {
     path
 }
 
-/// Snapshots stamped at midday UTC, which is the same weekday in every zone
-/// from UTC-11 to UTC+11, so the expected weekday does not depend on the machine.
+/// The weekday the viewer's own zone gives midday UTC on `day`, so expectations
+/// do not depend on the machine's zone.
+fn local_weekday(day: &str) -> Weekday {
+    let noon: DateTime<Utc> = format!("{day}T12:00:00Z").parse().unwrap();
+    noon.with_timezone(&Local).weekday()
+}
+
 fn snapshot_at(day: &str, percent: f64) -> Snapshot {
     parse_snapshot(&format!(
         r#"{{"schema_version":1,"provider":"claude","profile_id":"work","plan_label":null,
@@ -38,6 +43,12 @@ fn snapshot_at(day: &str, percent: f64) -> Snapshot {
         "source":"provider_reported"}}],"bonus_resets":null}}"#
     ))
     .unwrap()
+}
+
+/// The full weekday name the viewer's own zone gives midday UTC on `day`.
+fn local_name(day: &str) -> String {
+    let noon: DateTime<Utc> = format!("{day}T12:00:00Z").parse().unwrap();
+    noon.with_timezone(&Local).format("%A").to_string()
 }
 
 fn jobs(day: &'static str, percent: f64) -> JobFactory {
@@ -91,11 +102,11 @@ fn the_popup_names_the_busiest_weekday_of_the_configured_history_and_changes_not
     let cfg = config(&dir, &format!("[history]\npath = \"{}\"\n", history.display()));
 
     let mut app = app(cfg, jobs("2026-10-13", 1.0));
-    wait_until(&mut app, |a| a.busiest_day() == Some(Weekday::Fri));
+    wait_until(&mut app, |a| a.busiest_day() == Some(local_weekday("2026-10-16")));
 
     let with = rows(&app, app.busiest_day(), 0, Some(Position::new(3, 4)), Some("a notice"));
     let without = plain_rows(&app, 0, Some(Position::new(3, 4)), Some("a notice"));
-    assert!(with[1].contains("BUSIEST DAY: Friday"), "{:?}", with[1]);
+    assert!(with[1].contains(&format!("BUSIEST DAY: {}", local_name("2026-10-16"))), "{:?}", with[1]);
     assert!(with[1].contains("Agents") && with[1].contains('×'), "{:?}", with[1]);
     for y in (0..12).filter(|&y| y != 1) {
         assert_eq!(with[y], without[y], "row {y} is unchanged by the subtitle");
@@ -114,9 +125,9 @@ fn new_records_from_a_refresh_can_change_the_busiest_day() {
 
     // The refresh reports a heavier Wednesday than the seeded Monday.
     let mut app = app(cfg, jobs("2026-10-14", 70.0));
-    wait_until(&mut app, |a| a.busiest_day() == Some(Weekday::Mon));
+    wait_until(&mut app, |a| a.busiest_day() == Some(local_weekday("2026-10-12")));
     app.refresh(Instant::now());
-    wait_until(&mut app, |a| a.busiest_day() == Some(Weekday::Wed));
+    wait_until(&mut app, |a| a.busiest_day() == Some(local_weekday("2026-10-14")));
     let _ = fs::remove_dir_all(&dir);
 }
 

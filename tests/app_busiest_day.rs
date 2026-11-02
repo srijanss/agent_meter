@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use agent_meter::app::{App, JobFactory};
 use agent_meter::history::HistoryStore;
 use agent_meter::snapshot::{parse_snapshot, Snapshot};
-use chrono::Weekday;
+use chrono::{DateTime, Datelike, Local, Utc, Weekday};
 
 fn dir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("agent_meter_appbusy_{tag}_{}", std::process::id()));
@@ -17,7 +17,6 @@ fn dir(tag: &str) -> PathBuf {
     dir
 }
 
-/// Midday UTC is the same weekday in every zone from UTC-11 to UTC+11.
 fn snapshot_at(day: &str, percent: f64) -> Snapshot {
     parse_snapshot(&format!(
         r#"{{"schema_version":1,"provider":"claude","profile_id":"work","plan_label":null,
@@ -26,6 +25,12 @@ fn snapshot_at(day: &str, percent: f64) -> Snapshot {
         "source":"provider_reported"}}],"bonus_resets":null}}"#
     ))
     .unwrap()
+}
+
+/// The weekday the viewer's own zone gives midday UTC on `day`.
+fn local_weekday(day: &str) -> Weekday {
+    let noon: DateTime<Utc> = format!("{day}T12:00:00Z").parse().unwrap();
+    noon.with_timezone(&Local).weekday()
 }
 
 fn app(dir: &Path, history: Option<&Path>, report: (&'static str, f64)) -> App {
@@ -56,9 +61,9 @@ fn the_busiest_day_comes_from_the_history_and_follows_new_records() {
 
     let mut app = app(&dir, Some(&history), ("2026-10-14", 70.0));
     assert_eq!(app.busiest_day(), None, "nothing is known until the history has been read");
-    wait_until(&mut app, |a| a.busiest_day() == Some(Weekday::Mon));
+    wait_until(&mut app, |a| a.busiest_day() == Some(local_weekday("2026-10-12")));
     app.refresh(Instant::now());
-    wait_until(&mut app, |a| a.busiest_day() == Some(Weekday::Wed));
+    wait_until(&mut app, |a| a.busiest_day() == Some(local_weekday("2026-10-14")));
     let _ = fs::remove_dir_all(&dir);
 }
 
