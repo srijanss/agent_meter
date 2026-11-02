@@ -3,11 +3,14 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use agent_meter::app::{App, JobFactory};
 use agent_meter::failure::CollectorError;
 use agent_meter::history::HistoryStore;
+use chrono::{TimeZone, Utc};
 use agent_meter::snapshot::{parse_snapshot, Snapshot};
 
 fn dir(tag: &str) -> PathBuf {
@@ -206,11 +209,21 @@ fn closing_the_app_flushes_accepted_history_without_waiting_forever() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-#[test]
-fn a_full_history_queue_keeps_polling_responsive_reports_it_and_recovers() {
-    let dir = dir("overflow");
-    let history = dir.join("h.jsonl");
-    let cfg = config(&dir, &format!("[history]\npath = \"{}\"\n", history.display()));
+/// Jobs whose snapshots carry the current value of `round` as their
+/// `collected_at` second, so every refresh's records are distinguishable.
+fn round_jobs(round: Arc<AtomicU64>) -> JobFactory {
+    Box::new(move |account| {
+        let name = account.name.clone();
+        let round = round.clone();
+        Box::new(move || {
+            let mut s = snapshot(&name);
+            s.collected_at = Utc.timestamp_opt(1_800_000_000 + round.load(Ordering::SeqCst) as i64, 0).unwrap();
+            Ok(s)
+        })
+    })
+}
+
+fn locked(dir: &Path) -> fs::File {
     let lock = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -218,35 +231,92 @@ fn a_full_history_queue_keeps_polling_responsive_reports_it_and_recovers() {
         .open(dir.join("h.jsonl.lock"))
         .unwrap();
     lock.lock().unwrap();
+    lock
+}
 
-    let mut app = App::new(cfg, Path::new("/home/u"), ok_jobs(), Duration::from_secs(1)).unwrap();
+#[test]
+fn a_full_history_queue_keeps_polling_responsive_reports_it_and_recovers() {
+    let dir = dir("overflow");
+    let history = dir.join("h.jsonl");
+    let cfg = config(&dir, &format!("[history]\npath = \"{}\"\n", history.display()));
+    let lock = locked(&dir);
+    let round = Arc::new(AtomicU64::new(0));
+    let mut app = App::new(cfg, Path::new("/home/u"), round_jobs(round.clone()), Duration::from_secs(1)).unwrap();
     let start = Instant::now();
-    let started = Instant::now();
     // The writer is stuck on the lock, so far more refreshes than the queue
     // holds are submitted; each must return at once.
-    for round in 0..30u64 {
-        let at = start + Duration::from_secs(5 * (round + 1));
+    for n in 1..=30u64 {
+        round.store(n, Ordering::SeqCst);
+        let at = start + Duration::from_secs(5 * n);
         app.refresh(at);
         settle(&mut app, at);
     }
-    assert!(started.elapsed() < Duration::from_secs(5), "polling waited on a full history queue");
+    assert!(start.elapsed() < Duration::from_secs(5), "polling waited on a full history queue");
     assert!(app.notice().is_some(), "dropped batches are reported");
     assert!(app.entries().iter().all(|e| e.snapshot.is_some()));
 
-    // Once the lock is released the accepted records drain and recording resumes.
+    // Once the lock is released the accepted batches drain, oldest first.
     lock.unlock().unwrap();
     let store = HistoryStore::new(history, 1000);
-    let mut later = start + Duration::from_secs(1000);
-    wait_until(&mut app, later, |_| store.load().len() >= 2);
-    let backlog = {
-        std::thread::sleep(Duration::from_millis(300));
-        store.load().len()
-    };
-    assert!(backlog >= 2 && backlog < 60, "only accepted batches were written: {backlog}");
-    later += Duration::from_secs(10);
-    app.refresh(later);
-    settle(&mut app, later);
-    wait_until(&mut app, later, |_| store.load().len() >= backlog + 2);
+    let mut at = start + Duration::from_secs(1000);
+    // A refresh that is distinguishable from every earlier one, repeated until
+    // the queue has room for it. Writes are in order, so once it shows up every
+    // batch accepted before it has been written.
+    round.store(999, Ordering::SeqCst);
+    let recorded = |store: &HistoryStore| store.load().iter().any(|r| r.recorded_at.timestamp() == 1_800_000_999);
+    for _ in 0..200 {
+        at += Duration::from_secs(5);
+        app.refresh(at);
+        settle(&mut app, at);
+        std::thread::sleep(Duration::from_millis(10));
+        if recorded(&store) {
+            break;
+        }
+    }
+    wait_until(&mut app, at, |_| recorded(&store));
+
+    // Each refresh yields one or two batches, and at most 9 were ever accepted
+    // (8 queued plus 1 in the writer), so only the oldest rounds survive, in order.
+    let rounds: Vec<i64> =
+        store.load().iter().map(|r| r.recorded_at.timestamp() - 1_800_000_000).filter(|&n| n != 999).collect();
+    assert!(!rounds.is_empty() && rounds.len() <= 18, "only accepted batches were kept: {rounds:?}");
+    assert!(rounds.windows(2).all(|w| w[0] <= w[1]), "written in order: {rounds:?}");
+    assert_eq!(rounds[0], 1, "the oldest batch was kept: {rounds:?}");
+    assert!(*rounds.last().unwrap() <= 9, "later batches were dropped, not queued: {rounds:?}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dropping_the_app_gives_up_after_the_flush_limit_and_the_worker_still_finishes() {
+    let dir = dir("deadline");
+    let history = dir.join("h.jsonl");
+    let cfg = config(&dir, &format!("[history]\npath = \"{}\"\n", history.display()));
+    let lock = locked(&dir);
+    let now = Instant::now();
+    let mut app = App::new(cfg, Path::new("/home/u"), ok_jobs(), Duration::from_secs(1)).unwrap();
+    for n in 1..=3u64 {
+        let at = now + Duration::from_secs(5 * n);
+        app.refresh(at);
+        settle(&mut app, at);
+    }
+
+    // The lock is held well past the flush limit: closing must not wait for it.
+    let started = Instant::now();
+    drop(app);
+    let waited = started.elapsed();
+    assert!(waited >= Duration::from_millis(1500), "gave up before the flush limit: {waited:?}");
+    assert!(waited < Duration::from_secs(4), "closing waited on a stuck history: {waited:?}");
+
+    // The worker keeps going in the background and writes what was accepted.
+    lock.unlock().unwrap();
+    let store = HistoryStore::new(history, 100);
+    for _ in 0..400 {
+        if store.load().len() == 6 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(store.load().len(), 6, "every accepted batch is written after the lock frees");
     let _ = fs::remove_dir_all(&dir);
 }
 
