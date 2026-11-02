@@ -1,6 +1,6 @@
 //! The Herdr popup: a pure render of account snapshots into a ratatui frame.
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, Utc, Weekday};
 use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -80,11 +80,36 @@ pub fn render_popup_scrolled(
     notice: Option<&str>,
     scroll: usize,
 ) {
+    draw_popup(frame, entries, now, refreshing, hover, notice, scroll, None);
+}
+
+/// Like `render_popup`, with the header subtitle naming the `busiest` weekday
+/// of the local usage history. `None` leaves the subtitle out.
+pub fn render_popup_busiest(
+    frame: &mut Frame,
+    entries: &[AccountEntry],
+    now: DateTime<Utc>,
+    busiest: Option<Weekday>,
+) {
+    draw_popup(frame, entries, now, false, None, None, 0, busiest);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_popup(
+    frame: &mut Frame,
+    entries: &[AccountEntry],
+    now: DateTime<Utc>,
+    refreshing: bool,
+    hover: Option<Position>,
+    notice: Option<&str>,
+    scroll: usize,
+    busiest: Option<Weekday>,
+) {
     let block = Block::bordered().border_style(Style::new().fg(ACCENT));
     frame.render_widget(block, frame.area());
 
     let [header, divider, mut body] = regions(frame.area());
-    render_header(frame, header, refreshing);
+    render_header(frame, header, refreshing, busiest);
     render_divider(frame, divider);
     if let (Some(notice), true) = (notice, body.height > 0) {
         let status = Rect::new(body.x, body.bottom() - 1, body.width, 1);
@@ -429,11 +454,19 @@ fn meter_line(fill: Option<f64>, scoped: &[f64], width: u16) -> Line<'static> {
     Line::from(cells)
 }
 
-fn render_header(frame: &mut Frame, area: Rect, refreshing: bool) {
+fn render_header(frame: &mut Frame, area: Rect, refreshing: bool, busiest: Option<Weekday>) {
     let (title, buttons) = header_parts(area);
     let mark = Span::styled("[•_•] ", Style::new().fg(Color::White));
     let name = Span::styled("Agents", Style::new().add_modifier(Modifier::BOLD));
-    frame.render_widget(Paragraph::new(Line::from(vec![mark, name])), title);
+    let mut spans = vec![mark, name];
+    if let Some(day) = busiest {
+        let subtitle = format!("  BUSIEST DAY: {}", weekday_name(day));
+        // Only when all of it fits, so it never runs under the buttons.
+        if "[•_•] Agents".chars().count() + subtitle.chars().count() <= title.width as usize {
+            spans.push(Span::styled(subtitle, Style::new().add_modifier(Modifier::DIM)));
+        }
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), title);
     let Some(buttons) = buttons else { return };
 
     let button = Style::new().fg(ACCENT).bg(BUTTON_BG);
@@ -443,6 +476,18 @@ fn render_header(frame: &mut Frame, area: Rect, refreshing: bool) {
         Span::styled(" × ", button),
     ]);
     frame.render_widget(Paragraph::new(line), buttons);
+}
+
+fn weekday_name(day: Weekday) -> &'static str {
+    match day {
+        Weekday::Mon => "Monday",
+        Weekday::Tue => "Tuesday",
+        Weekday::Wed => "Wednesday",
+        Weekday::Thu => "Thursday",
+        Weekday::Fri => "Friday",
+        Weekday::Sat => "Saturday",
+        Weekday::Sun => "Sunday",
+    }
 }
 
 fn render_divider(frame: &mut Frame, area: Rect) {

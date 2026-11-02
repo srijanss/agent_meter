@@ -10,7 +10,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::{DateTime, Utc};
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, Datelike, NaiveDate, TimeZone, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 
 use crate::snapshot::{Snapshot, Source};
@@ -141,4 +143,28 @@ fn next_nonce() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
     nanos ^ NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// The weekday with the most usage, judged in `tz` (the viewer's local zone).
+/// A day's usage is the highest figure any record reported that day, and a
+/// weekday's usage is the sum over its days. `None` when no record reported
+/// any usage, so there is nothing honest to name. Ties go to the earlier
+/// weekday, Monday first.
+pub fn busiest_day<Z: TimeZone>(records: &[HistoryRecord], tz: &Z) -> Option<Weekday> {
+    let mut peaks: BTreeMap<NaiveDate, f64> = BTreeMap::new();
+    for record in records {
+        let day = record.recorded_at.with_timezone(tz).date_naive();
+        let peak = record.windows.iter().filter_map(|w| w.used_percent).fold(0.0_f64, f64::max);
+        let slot = peaks.entry(day).or_insert(0.0);
+        *slot = slot.max(peak);
+    }
+    let mut totals = [0.0_f64; 7];
+    for (day, peak) in peaks {
+        totals[day.weekday().num_days_from_monday() as usize] += peak;
+    }
+    let (index, total) = totals
+        .iter()
+        .enumerate()
+        .fold((0, 0.0), |best, (i, &t)| if t > best.1 { (i, t) } else { best });
+    (total > 0.0).then(|| Weekday::try_from(index as u8).expect("index is below 7"))
 }
