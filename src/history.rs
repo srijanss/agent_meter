@@ -18,6 +18,8 @@ use crate::snapshot::{Snapshot, Source};
 pub struct WindowRecord {
     pub id: String,
     pub used_percent: Option<f64>,
+    /// A window can differ from its snapshot: an estimate stays an estimate.
+    pub source: Source,
 }
 
 /// One snapshot's usage figures.
@@ -40,7 +42,11 @@ impl HistoryRecord {
             windows: snapshot
                 .windows
                 .iter()
-                .map(|w| WindowRecord { id: w.id.clone(), used_percent: w.used_percent })
+                .map(|w| WindowRecord {
+                    id: w.id.clone(),
+                    used_percent: w.used_percent,
+                    source: w.source,
+                })
                 .collect(),
         }
     }

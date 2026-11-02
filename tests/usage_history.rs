@@ -82,3 +82,24 @@ fn the_store_is_bounded_and_skips_lines_it_cannot_read() {
     assert!(!fs::read_to_string(&path).unwrap().contains("not json"));
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn each_window_keeps_its_own_source_even_inside_a_provider_reported_snapshot() {
+    let dir = dir("window_source");
+    let store = HistoryStore::new(dir.join("history.jsonl"), 10);
+    let mixed = parse_snapshot(
+        r#"{"schema_version":1,"provider":"claude","profile_id":"work","plan_label":null,
+        "collected_at":"2026-10-14T01:00:00Z","source":"provider_reported","health":"ok",
+        "windows":[
+          {"id":"s","label":"Session","used_percent":10.0,"resets_at":null,"source":"provider_reported"},
+          {"id":"w","label":"Weekly","used_percent":20.0,"resets_at":null,"source":"local_estimate"}],
+        "bonus_resets":null}"#,
+    )
+    .unwrap();
+    store.record(&mixed).unwrap();
+
+    let windows = &store.load()[0].windows;
+    assert_eq!(windows[0].source, Source::ProviderReported);
+    assert_eq!(windows[1].source, Source::LocalEstimate);
+    let _ = fs::remove_dir_all(&dir);
+}
