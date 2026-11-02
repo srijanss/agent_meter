@@ -43,13 +43,33 @@ fn a_countdown_is_elapsed_time_even_across_a_dst_change() {
     assert_eq!(countdown_label(reset, now), "1d 0h");
 }
 
+/// Runs the checks in `child` in a fresh process per host timezone, so the
+/// runner's own environment is never mutated.
 #[test]
-fn the_process_timezone_does_not_change_parsing() {
-    // Safe: only this test binary's single-threaded env access.
-    let parse = || parse_snapshot(&snapshot_with_reset("2026-10-14T05:00:00+02:00")).unwrap().windows[0].resets_at;
-    let expected = Some(Utc.with_ymd_and_hms(2026, 10, 14, 3, 0, 0).unwrap());
+fn every_check_gives_the_same_result_under_any_host_timezone() {
     for tz in ["UTC", "Australia/Sydney", "America/Los_Angeles", "Asia/Kathmandu"] {
-        unsafe { std::env::set_var("TZ", tz) };
-        assert_eq!(parse(), expected, "TZ={tz}");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "child", "--nocapture", "--test-threads=1"])
+            .env("TZ", tz)
+            .env("AGENT_METER_TZ_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "TZ={tz}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
+}
+
+/// Only runs inside the per-timezone child process.
+#[test]
+fn child() {
+    if std::env::var_os("AGENT_METER_TZ_CHILD").is_none() {
+        return;
+    }
+    offsets_in_source_timestamps_normalize_to_the_same_instant();
+    named_zones_resolve_to_one_instant_across_dst_changes();
+    a_countdown_is_elapsed_time_even_across_a_dst_change();
 }
