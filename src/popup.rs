@@ -258,6 +258,7 @@ fn window_rows(entry: &AccountEntry, now: DateTime<Utc>) -> Vec<BodyRow> {
             .into_iter()
             .enumerate()
             .flat_map(|(index, row)| {
+                let shows_usage = row.fill.is_some() || !row.scoped.is_empty();
                 let mut rows = vec![BodyRow::Window {
                     tip: window_tooltip(snapshot, index, now, STALE_AFTER).unwrap_or_default(),
                     title: row.label,
@@ -269,7 +270,7 @@ fn window_rows(entry: &AccountEntry, now: DateTime<Utc>) -> Vec<BodyRow> {
                     },
                 }];
                 // A local estimate is never passed off as provider-reported usage.
-                if row.estimate && row.fill.is_some() {
+                if row.estimate && shows_usage {
                     rows.push(BodyRow::Split {
                         left: dim("↳ local estimate, not provider usage".to_string()),
                         right: Line::default(),
