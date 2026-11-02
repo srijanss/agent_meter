@@ -261,7 +261,8 @@ fn window_rows(entry: &AccountEntry, now: DateTime<Utc>) -> Vec<BodyRow> {
                 let shows_usage = row.fill.is_some() || !row.scoped.is_empty();
                 let mut rows = vec![BodyRow::Window {
                     tip: window_tooltip(snapshot, index, now, STALE_AFTER).unwrap_or_default(),
-                    title: row.label,
+                    // A compact marker stays on the meter row even if the note below is clipped.
+                    title: if row.estimate && shows_usage { format!("~{}", row.label) } else { row.label },
                     fill: row.fill,
                     scoped: row.scoped,
                     time_left: match row.reset {

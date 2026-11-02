@@ -65,3 +65,30 @@ fn an_estimate_window_with_only_scoped_usage_is_still_labelled() {
         .collect();
     assert!(text.contains("local estimate"));
 }
+
+#[test]
+fn the_estimate_marker_stays_on_the_meter_row_when_the_note_is_clipped() {
+    let snapshot = parse_snapshot(
+        r#"{"schema_version":1,"provider":"codex","profile_id":"p","plan_label":null,
+        "collected_at":"2026-10-14T00:00:00Z","source":"local_estimate","health":"ok",
+        "windows":[{"id":"w","label":"Weekly","used_percent":40.0,"resets_at":null,
+          "source":"local_estimate"}],"bonus_resets":null}"#,
+    )
+    .unwrap();
+    let entries = [AccountEntry {
+        account: Account { name: "Main".into(), provider: Provider::Codex, home: PathBuf::from("/x"), active: true },
+        snapshot: Some(snapshot),
+    }];
+    let now = Utc.with_ymd_and_hms(2026, 10, 14, 0, 0, 0).unwrap();
+    for height in 4..=8u16 {
+        let mut terminal = Terminal::new(TestBackend::new(48, height)).unwrap();
+        terminal.draw(|frame| render_popup(frame, &entries, now)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let lines: Vec<String> = (0..buf.area.height)
+            .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect())
+            .collect();
+        if let Some(row) = lines.iter().find(|l| l.contains("Weekly")) {
+            assert!(row.contains("~Weekly"), "height {height}: {row:?}");
+        }
+    }
+}
