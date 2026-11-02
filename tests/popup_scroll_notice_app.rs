@@ -1,5 +1,4 @@
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -32,7 +31,7 @@ fn the_use_link_under_a_switch_failure_notice_cannot_be_chosen() {
         config.push_str(&format!("[accounts.acct-{n}]\nprovider = \"claude\"\n\n"));
     }
     fs::write(&path, config).unwrap();
-    let mut app = App::new(path, Path::new("/home/u"), idle_jobs(), Duration::from_secs(30)).unwrap();
+    let mut app = App::new(path.clone(), Path::new("/home/u"), idle_jobs(), Duration::from_secs(30)).unwrap();
     let now = Utc.with_ymd_and_hms(2026, 10, 14, 0, 0, 0).unwrap();
     let send =|app: &mut App, event: Event| app.handle(&event, AREA, now, Instant::now());
 
@@ -41,13 +40,15 @@ fn the_use_link_under_a_switch_failure_notice_cannot_be_chosen() {
     send(&mut app, key(KeyCode::Down)).unwrap();
     assert_eq!(app.scroll(), 2);
 
-    // Make the config unwritable so choosing acct-2 (link 1) fails with a notice.
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+    // Replace the config file with a directory, so choosing acct-2 (link 1)
+    // fails with a notice whatever user runs the tests.
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
     assert!(send(&mut app, key(KeyCode::Char('1'))).is_err());
     assert!(app.notice().is_some());
 
     // The notice now covers that last row, so link 2 is not offered.
     assert!(send(&mut app, key(KeyCode::Char('2'))).is_ok());
     assert!(app.notice().is_some(), "no action ran, so the notice stays");
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+    let _ = fs::remove_dir_all(&dir);
 }
