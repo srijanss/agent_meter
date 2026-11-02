@@ -257,15 +257,25 @@ fn window_rows(entry: &AccountEntry, now: DateTime<Utc>) -> Vec<BodyRow> {
         AccountView::Rows(rows) => rows
             .into_iter()
             .enumerate()
-            .map(|(index, row)| BodyRow::Window {
-                tip: window_tooltip(snapshot, index, now, STALE_AFTER).unwrap_or_default(),
-                title: row.label,
-                fill: row.fill,
-                scoped: row.scoped,
-                time_left: match row.reset {
-                    Some(ResetDisplay::Remaining(left)) => left,
-                    Some(ResetDisplay::Stale) | None => String::new(),
-                },
+            .flat_map(|(index, row)| {
+                let mut rows = vec![BodyRow::Window {
+                    tip: window_tooltip(snapshot, index, now, STALE_AFTER).unwrap_or_default(),
+                    title: row.label,
+                    fill: row.fill,
+                    scoped: row.scoped,
+                    time_left: match row.reset {
+                        Some(ResetDisplay::Remaining(left)) => left,
+                        Some(ResetDisplay::Stale) | None => String::new(),
+                    },
+                }];
+                // A local estimate is never passed off as provider-reported usage.
+                if row.estimate && row.fill.is_some() {
+                    rows.push(BodyRow::Split {
+                        left: dim("↳ local estimate, not provider usage".to_string()),
+                        right: Line::default(),
+                    });
+                }
+                rows
             })
             .collect(),
         AccountView::Unavailable => unavailable(),

@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 
 use crate::countdown::{countdown_label, reset_display, ResetDisplay};
 use crate::meter::fill_fraction;
-use crate::snapshot::{BonusResets, Snapshot};
+use crate::snapshot::{BonusResets, Snapshot, Source};
 
 /// One window row: an empty track and no countdown when the usage is unknown.
 #[derive(Debug, Clone, PartialEq)]
@@ -15,6 +15,8 @@ pub struct RowView {
     /// Fill fractions of known scoped allowances on this window's clock; an
     /// unknown scoped percent is dropped, never drawn as 0.
     pub scoped: Vec<f64>,
+    /// The usage is a local estimate, not provider-reported.
+    pub estimate: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -48,7 +50,7 @@ pub fn account_view(snapshot: &Snapshot, now: DateTime<Utc>) -> AccountView {
                 .and(w.resets_at)
                 .map(|at| reset_display(at, now));
             let scoped = w.scoped.iter().filter_map(|s| fill_fraction(s.used_percent)).collect();
-            RowView { label: w.label.clone(), fill, reset, scoped }
+            RowView { label: w.label.clone(), fill, reset, scoped, estimate: w.source == Source::LocalEstimate }
         })
         .collect();
     if rows.iter().any(|r| r.fill.is_some() || !r.scoped.is_empty()) {
