@@ -204,3 +204,18 @@ fn a_failed_replacement_keeps_the_original_and_a_later_record_succeeds() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn record_all_appends_a_batch_in_order_and_respects_the_bound() {
+    let dir = dir("batch");
+    let store = HistoryStore::new(dir.join("history.jsonl"), 3);
+    store.record_all(&[]).unwrap();
+    assert!(store.load().is_empty(), "an empty batch records nothing");
+
+    store.record_all(&[snapshot("a", "provider_reported", 1, 1.0), snapshot("b", "provider_reported", 2, 2.0)]).unwrap();
+    store.record_all(&[snapshot("c", "provider_reported", 3, 3.0), snapshot("d", "provider_reported", 4, 4.0)]).unwrap();
+
+    let accounts: Vec<String> = store.load().into_iter().map(|r| r.account).collect();
+    assert_eq!(accounts, ["b", "c", "d"], "oldest dropped beyond the bound");
+    let _ = fs::remove_dir_all(&dir);
+}

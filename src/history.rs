@@ -154,6 +154,16 @@ impl HistoryStore {
     /// recorders cannot lose each other's records, and the file is replaced
     /// whole, so a failure never leaves a half-written one.
     pub fn record(&self, snapshot: &Snapshot) -> io::Result<()> {
+        self.record_all(std::slice::from_ref(snapshot))
+    }
+
+    /// Like `record` for several snapshots at once: one lock, one read and one
+    /// replacement however many are added, so a refresh of many accounts does
+    /// not rewrite the history once per account.
+    pub fn record_all(&self, snapshots: &[Snapshot]) -> io::Result<()> {
+        if snapshots.is_empty() {
+            return Ok(());
+        }
         let lock = OpenOptions::new()
             .read(true)
             .write(true)
@@ -164,7 +174,7 @@ impl HistoryStore {
         lock.lock()?;
 
         let mut records = self.read()?;
-        records.push(HistoryRecord::from_snapshot(snapshot));
+        records.extend(snapshots.iter().map(HistoryRecord::from_snapshot));
         let excess = records.len().saturating_sub(self.max_records);
         let mut text = String::new();
         for record in &records[excess..] {
