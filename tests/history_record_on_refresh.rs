@@ -205,3 +205,82 @@ fn closing_the_app_flushes_accepted_history_without_waiting_forever() {
     release.join().unwrap();
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_full_history_queue_keeps_polling_responsive_reports_it_and_recovers() {
+    let dir = dir("overflow");
+    let history = dir.join("h.jsonl");
+    let cfg = config(&dir, &format!("[history]\npath = \"{}\"\n", history.display()));
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("h.jsonl.lock"))
+        .unwrap();
+    lock.lock().unwrap();
+
+    let mut app = App::new(cfg, Path::new("/home/u"), ok_jobs(), Duration::from_secs(1)).unwrap();
+    let start = Instant::now();
+    let started = Instant::now();
+    // The writer is stuck on the lock, so far more refreshes than the queue
+    // holds are submitted; each must return at once.
+    for round in 0..30u64 {
+        let at = start + Duration::from_secs(5 * (round + 1));
+        app.refresh(at);
+        settle(&mut app, at);
+    }
+    assert!(started.elapsed() < Duration::from_secs(5), "polling waited on a full history queue");
+    assert!(app.notice().is_some(), "dropped batches are reported");
+    assert!(app.entries().iter().all(|e| e.snapshot.is_some()));
+
+    // Once the lock is released the accepted records drain and recording resumes.
+    lock.unlock().unwrap();
+    let store = HistoryStore::new(history, 1000);
+    let mut later = start + Duration::from_secs(1000);
+    wait_until(&mut app, later, |_| store.load().len() >= 2);
+    let backlog = {
+        std::thread::sleep(Duration::from_millis(300));
+        store.load().len()
+    };
+    assert!(backlog >= 2 && backlog < 60, "only accepted batches were written: {backlog}");
+    later += Duration::from_secs(10);
+    app.refresh(later);
+    settle(&mut app, later);
+    wait_until(&mut app, later, |_| store.load().len() >= backlog + 2);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_mixed_refresh_records_only_the_accounts_that_reported() {
+    let dir = dir("mixed");
+    let history = dir.join("h.jsonl");
+    let cfg = config(&dir, &format!("[history]\npath = \"{}\"\n", history.display()));
+    let jobs: JobFactory = Box::new(|account| {
+        let name = account.name.clone();
+        Box::new(move || {
+            if name == "home" {
+                Err(CollectorError::Unavailable)
+            } else {
+                Ok(snapshot(&name))
+            }
+        })
+    });
+    let mut app = run_refresh(cfg, jobs);
+    let store = HistoryStore::new(history, 100);
+    let now = Instant::now();
+    wait_until(&mut app, now, |_| store.load().len() == 1);
+
+    // Later refreshes add one record for the reporting account, never a stale
+    // copy for the failing one.
+    for round in 1..=2u64 {
+        let at = now + Duration::from_secs(5 * round);
+        app.refresh(at);
+        settle(&mut app, at);
+        wait_until(&mut app, at, |_| store.load().len() == 1 + round as usize);
+    }
+    std::thread::sleep(Duration::from_millis(50));
+    let records = store.load();
+    assert_eq!(records.len(), 3);
+    assert!(records.iter().all(|r| r.account == "work"));
+    let _ = fs::remove_dir_all(&dir);
+}
