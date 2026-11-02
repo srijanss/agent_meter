@@ -202,6 +202,5 @@ fn a_failed_replacement_keeps_the_original_and_a_later_record_succeeds() {
         .collect();
     assert!(leftovers.is_empty(), "{leftovers:?}");
 
-    // A temporary file this call never created is never removed by it.
     let _ = fs::remove_dir_all(&dir);
 }
