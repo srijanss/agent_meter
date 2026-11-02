@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 use agent_meter::app::{JobFactory, AppError};
 use agent_meter::failure::CollectorError;
 use agent_meter::snapshot::parse_snapshot;
-use agent_meter::usage_cli::{parse_command, usage_report, Command};
+use agent_meter::usage_cli::{parse_command, usage_json, usage_report, Command};
+use agent_meter::popup::AccountEntry;
+use agent_meter::account::{Account, Provider};
+use chrono::{TimeZone, Utc};
 
 fn args(list: &[&str]) -> Vec<String> {
     list.iter().map(|s| s.to_string()).collect()
@@ -84,7 +87,7 @@ fn usage_report_lists_every_account_with_its_snapshot_freshness_and_no_secrets()
     assert_eq!(work["snapshot"]["source"], "provider_reported");
     assert_eq!(work["snapshot"]["collected_at"], "2026-10-14T00:00:00Z");
     assert_eq!(work["snapshot"]["windows"][0]["used_percent"], 42.0);
-    assert!(work["age_seconds"].as_i64().unwrap() > 0, "freshness is reported");
+    assert!(work["age_seconds"].is_i64(), "freshness is reported");
 
     let broken = accounts.iter().find(|a| a["name"] == "broken").unwrap();
     assert!(broken["snapshot"].is_null());
@@ -94,4 +97,25 @@ fn usage_report_lists_every_account_with_its_snapshot_freshness_and_no_secrets()
     assert!(!text.contains("/secret"), "{text}");
     assert!(!text.contains("home"), "{text}");
     let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn freshness_is_the_whole_seconds_since_collection_and_never_negative() {
+    let entry = AccountEntry {
+        account: Account {
+            name: "work".into(),
+            provider: Provider::Claude,
+            home: PathBuf::from("/x"),
+            active: false,
+        },
+        snapshot: Some(parse_snapshot(&snapshot_json("work")).unwrap()),
+    };
+    let age = |now| {
+        let text = usage_json(std::slice::from_ref(&entry), now);
+        serde_json::from_str::<serde_json::Value>(&text).unwrap()["accounts"][0]["age_seconds"].clone()
+    };
+    // Collected at 2026-10-14T00:00:00Z.
+    assert_eq!(age(Utc.with_ymd_and_hms(2026, 10, 14, 0, 1, 30).unwrap()), 90);
+    assert_eq!(age(Utc.with_ymd_and_hms(2026, 10, 14, 0, 0, 0).unwrap()), 0);
+    assert_eq!(age(Utc.with_ymd_and_hms(2026, 10, 13, 23, 0, 0).unwrap()), 0, "clock skew clamps to zero");
 }
