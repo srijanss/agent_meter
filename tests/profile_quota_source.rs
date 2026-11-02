@@ -63,3 +63,14 @@ fn two_profiles_on_one_provider_share_one_account_not_two() {
         _ => panic!("both resolve to the same account entry"),
     }
 }
+
+#[test]
+fn two_active_accounts_for_a_provider_are_ambiguous_so_the_quota_is_unknown_in_any_order() {
+    let a = entry("a", Provider::Claude, true);
+    let b = entry("b", Provider::Claude, true);
+    let codex = entry("x", Provider::Codex, true);
+    for entries in [[a.clone(), b.clone(), codex.clone()], [b, a, codex.clone()]] {
+        assert!(matches!(quota_for(&profile("claude", "anthropic"), &entries), Quota::Unknown));
+        assert_eq!(source_name(&quota_for(&profile("pi", "openai"), &entries)), Some("x"));
+    }
+}

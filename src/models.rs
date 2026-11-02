@@ -89,13 +89,18 @@ impl Quota<'_> {
 
 /// A profile's usage is its provider's active account, whatever the harness:
 /// the harness is never a quota source, so profiles never double-count.
+/// With no active account, or more than one, the quota is unknown.
 pub fn quota_for<'a>(profile: &ModelProfile, entries: &'a [AccountEntry]) -> Quota<'a> {
     let provider = match profile.provider {
         ModelProvider::Anthropic => Provider::Claude,
         ModelProvider::Openai => Provider::Codex,
     };
-    entries
+    let mut active = entries
         .iter()
-        .find(|entry| entry.account.provider == provider && entry.account.active)
-        .map_or(Quota::Unknown, Quota::Account)
+        .filter(|entry| entry.account.provider == provider && entry.account.active);
+    // Two active accounts are ambiguous: show unknown rather than guess.
+    match (active.next(), active.next()) {
+        (Some(entry), None) => Quota::Account(entry),
+        _ => Quota::Unknown,
+    }
 }
