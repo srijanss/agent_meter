@@ -20,6 +20,9 @@ const TICK: Duration = Duration::from_millis(200);
 /// A manual refresh may re-run an account this long after its last one ended.
 const MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(15);
 
+/// `usage --json` gives up after this long, so a script is never left hanging.
+const USAGE_TIMEOUT: Duration = Duration::from_secs(30);
+
 fn main() -> ExitCode {
     // Herdr owns stdout, so every message goes to stderr.
     match start() {
@@ -46,7 +49,8 @@ fn start() -> Result<(), (u8, String)> {
     let config = config.unwrap_or_else(|| default_config_path(&home));
     if json {
         // The one command that writes to stdout: its JSON is the output.
-        let report = usage_report(&config, &home, system_jobs()).map_err(usage)?;
+        let report = usage_report(&config, &home, system_jobs(), USAGE_TIMEOUT)
+            .map_err(|e| (e.exit_code(), e.to_string()))?;
         println!("{report}");
         return Ok(());
     }

@@ -2,6 +2,7 @@
 //! snapshots the popup shows, for independent local integrations. It reads the
 //! accounts' usage and prints it; it never writes the config or opens a socket.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -72,16 +73,70 @@ pub fn usage_json(entries: &[AccountEntry], now: DateTime<Utc>) -> String {
     .to_string()
 }
 
-/// Collects every account's usage and renders it.
-pub fn usage_report(config: &Path, user_home: &Path, jobs: JobFactory) -> Result<String, AppError> {
+/// Why `usage --json` produced no report. Each kind has its own exit code so
+/// a script can tell them apart without parsing stderr.
+#[derive(Debug)]
+pub enum UsageError {
+    /// Bad arguments or config: a problem with how it was started.
+    Invalid(AppError),
+    /// Collectors were still running when the time bound passed.
+    Timeout,
+    /// Every collector finished but none reported usage.
+    NoData,
+}
+
+impl UsageError {
+    pub fn exit_code(&self) -> u8 {
+        match self {
+            UsageError::Invalid(_) => 2,
+            UsageError::Timeout => 3,
+            UsageError::NoData => 4,
+        }
+    }
+}
+
+impl fmt::Display for UsageError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UsageError::Invalid(error) => error.fmt(f),
+            UsageError::Timeout => f.write_str("timed out waiting for usage"),
+            UsageError::NoData => f.write_str("no account reported usage"),
+        }
+    }
+}
+
+impl std::error::Error for UsageError {}
+
+impl From<AppError> for UsageError {
+    fn from(error: AppError) -> Self {
+        UsageError::Invalid(error)
+    }
+}
+
+/// Collects every account's usage and renders it, giving up after `timeout`.
+/// One account reporting is enough for a report; the others show a null snapshot.
+pub fn usage_report(
+    config: &Path,
+    user_home: &Path,
+    jobs: JobFactory,
+    timeout: Duration,
+) -> Result<String, UsageError> {
     let mut app = App::new(config.to_path_buf(), user_home, jobs, Duration::ZERO)?;
+    let deadline = Instant::now() + timeout;
     app.refresh(Instant::now());
     loop {
-        app.poll(Instant::now());
+        let now = Instant::now();
+        app.poll(now);
         if !app.refreshing() {
             break;
         }
+        if now >= deadline {
+            return Err(UsageError::Timeout);
+        }
         thread::sleep(Duration::from_millis(10));
+    }
+    if app.entries().iter().all(|entry| entry.snapshot.is_none()) {
+        return Err(UsageError::NoData);
     }
     Ok(usage_json(app.entries(), Utc::now()))
 }

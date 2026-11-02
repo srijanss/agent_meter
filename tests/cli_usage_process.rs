@@ -45,22 +45,15 @@ fn bad_arguments_or_config_exit_2_with_nothing_on_stdout() {
 }
 
 #[test]
-fn a_failed_collector_still_yields_one_json_document_with_a_null_snapshot() {
+fn no_account_reporting_exits_4_with_nothing_on_stdout() {
     let home = dir("ok");
     let config = home.join("config.toml");
     fs::write(&config, "[accounts.work]\nprovider = \"claude\"\n").unwrap();
 
     let out = run(&home, &["usage", "--json", "--config", config.to_str().unwrap()]);
-    assert!(
-        out.status.success(),
-        "a collector failure is still a successful report: {:?}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let text = String::from_utf8(out.stdout).unwrap();
-    assert!(!text.contains('\u{1b}'), "no terminal escapes: {text:?}");
-    assert_eq!(text.matches('\n').count(), 1, "one line: {text:?}");
-    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(value["accounts"][0]["name"], "work");
-    assert!(value["accounts"][0]["snapshot"].is_null());
+    assert_eq!(out.status.code(), Some(4), "no data is its own exit code");
+    assert!(out.stdout.is_empty(), "no report is printed: {:?}", out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("no account reported usage"), "{stderr}");
     let _ = fs::remove_dir_all(&home);
 }

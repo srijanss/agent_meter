@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use agent_meter::app::{JobFactory, AppError};
 use agent_meter::failure::CollectorError;
@@ -72,7 +73,7 @@ fn usage_report_lists_every_account_with_its_snapshot_freshness_and_no_secrets()
     )
     .unwrap();
 
-    let text = usage_report(&path, Path::new("/home/u"), jobs()).unwrap();
+    let text = usage_report(&path, Path::new("/home/u"), jobs(), Duration::from_secs(30)).unwrap();
     let value: serde_json::Value = serde_json::from_str(&text).unwrap();
 
     assert_eq!(value["schema_version"], 1);
