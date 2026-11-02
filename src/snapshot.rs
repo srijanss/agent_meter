@@ -1,10 +1,10 @@
 //! The versioned, normalized usage snapshot (agents_plugin_spec.md §4).
 
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Where a value came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
     ProviderReported,
@@ -13,7 +13,7 @@ pub enum Source {
 }
 
 /// Whether the collector could report usage for this account.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Health {
     Ok,
@@ -21,7 +21,7 @@ pub enum Health {
 }
 
 /// One limit window, such as the session or weekly allowance.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Window {
     pub id: String,
     pub label: String,
@@ -35,21 +35,21 @@ pub struct Window {
 }
 
 /// A model-scoped allowance sharing its window's reset clock.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ScopedAllowance {
     pub label: String,
     pub used_percent: Option<f64>,
 }
 
 /// Bonus/free reset entitlements, separate from window resets.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct BonusResets {
     pub remaining: Option<u32>,
     pub expires_at: Option<DateTime<Utc>>,
     pub source: Source,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Snapshot {
     pub schema_version: u32,
     pub provider: String,

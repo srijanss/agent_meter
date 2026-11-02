@@ -3,6 +3,7 @@
 pub mod snapshot;
 pub mod meter;
 pub mod models;
+pub mod usage_cli;
 pub mod countdown;
 pub mod display;
 pub mod freshness;

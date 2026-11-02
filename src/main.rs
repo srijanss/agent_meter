@@ -5,9 +5,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use agent_meter::app::{default_config_path, load_refresh_interval, parse_args, system_jobs, App};
+use agent_meter::app::{default_config_path, load_refresh_interval, system_jobs, App};
 use agent_meter::popup::render_popup_scrolled;
 use agent_meter::terminal::{run_in_terminal, CrosstermRawMode};
+use agent_meter::usage_cli::{parse_command, usage_report, Command};
 use chrono::Utc;
 use crossterm::event;
 use ratatui::backend::CrosstermBackend;
@@ -34,11 +35,21 @@ fn main() -> ExitCode {
 /// 1 is a problem running the popup.
 fn start() -> Result<(), (u8, String)> {
     let usage = |e: agent_meter::app::AppError| (2, e.to_string());
-    let config = parse_args(std::env::args().skip(1)).map_err(usage)?;
+    let command = parse_command(std::env::args().skip(1)).map_err(usage)?;
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or((2, "HOME is not set".to_string()))?;
+    let (config, json) = match command {
+        Command::Popup(config) => (config, false),
+        Command::UsageJson(config) => (config, true),
+    };
     let config = config.unwrap_or_else(|| default_config_path(&home));
+    if json {
+        // The one command that writes to stdout: its JSON is the output.
+        let report = usage_report(&config, &home, system_jobs()).map_err(usage)?;
+        println!("{report}");
+        return Ok(());
+    }
     let interval = load_refresh_interval(&config).map_err(usage)?;
     let mut app = App::new(config, &home, system_jobs(), MIN_REFRESH_INTERVAL)
         .map_err(usage)?

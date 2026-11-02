@@ -48,7 +48,8 @@ impl std::error::Error for AppError {}
 /// Shown when choosing an account fails; the cause stays out of the popup.
 const SWITCH_FAILED: &str = "Could not switch account; check the config file";
 
-pub const USAGE: &str = "usage: herdr-agents [--config PATH]";
+pub const USAGE: &str =
+    "usage: herdr-agents [--config PATH] | herdr-agents usage --json [--config PATH]";
 
 /// Largest config file read; a config is a few lines, so anything bigger is wrong.
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
