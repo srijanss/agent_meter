@@ -4,9 +4,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use agent_meter::app::JobFactory;
+use agent_meter::{claude_collector, codex_collector};
 use agent_meter::failure::CollectorError;
 use agent_meter::snapshot::parse_snapshot;
-use agent_meter::usage_cli::{usage_report, UsageError};
+use agent_meter::usage_cli::{usage_report, UsageError, DEFAULT_TIMEOUT};
 
 fn snapshot_json(name: &str) -> String {
     format!(
@@ -74,4 +75,19 @@ fn a_collector_that_never_finishes_ends_in_a_timeout_within_the_bound() {
     let err = usage_report(&slow, Path::new("/home/u"), jobs(), Duration::from_millis(100)).unwrap_err();
     assert!(matches!(err, UsageError::Timeout), "{err:?}");
     assert!(started.elapsed() < Duration::from_secs(2), "returned at the bound, not when the job ended");
+}
+
+#[test]
+fn the_default_bound_outlasts_every_collectors_own_limits_so_none_is_orphaned() {
+    // A child process is only guaranteed reaped by its collector's own deadline,
+    // so giving up earlier than that could leave one running after we exit.
+    assert!(DEFAULT_TIMEOUT > claude_collector::MAX_COLLECTION);
+    assert!(DEFAULT_TIMEOUT > codex_collector::MAX_COLLECTION);
+}
+
+#[test]
+fn an_unrepresentable_timeout_means_no_bound_rather_than_a_panic() {
+    let some = config("max", "[accounts.ok1]\nprovider = \"claude\"\n");
+    let text = usage_report(&some, Path::new("/home/u"), jobs(), Duration::MAX).unwrap();
+    assert!(text.contains("\"ok1\""));
 }

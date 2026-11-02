@@ -14,6 +14,10 @@ use crate::account::Provider;
 use crate::app::{parse_args, App, AppError, JobFactory, USAGE};
 use crate::popup::AccountEntry;
 
+/// How long `usage --json` waits before giving up. It exceeds every collector's
+/// own limit, so each child process has been reaped by its collector by then.
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(90);
+
 /// Version of the `usage --json` envelope (each snapshot has its own version).
 pub const REPORT_SCHEMA_VERSION: u32 = 1;
 
@@ -122,7 +126,8 @@ pub fn usage_report(
     timeout: Duration,
 ) -> Result<String, UsageError> {
     let mut app = App::new(config.to_path_buf(), user_home, jobs, Duration::ZERO)?;
-    let deadline = Instant::now() + timeout;
+    // A bound too large to represent is no bound at all.
+    let deadline = Instant::now().checked_add(timeout);
     app.refresh(Instant::now());
     loop {
         let now = Instant::now();
@@ -130,7 +135,7 @@ pub fn usage_report(
         if !app.refreshing() {
             break;
         }
-        if now >= deadline {
+        if deadline.is_some_and(|deadline| now >= deadline) {
             return Err(UsageError::Timeout);
         }
         thread::sleep(Duration::from_millis(10));

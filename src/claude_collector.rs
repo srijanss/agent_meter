@@ -19,6 +19,10 @@ const AUTH_LIMITS: Limits = Limits { timeout: Duration::from_secs(10), max_outpu
 /// `/usage` runs locally with no model turn but takes about 15s.
 const USAGE_LIMITS: Limits = Limits { timeout: Duration::from_secs(45), max_output: 1024 * 1024 };
 
+/// The longest a collection can run: both commands hitting their own timeout.
+pub const MAX_COLLECTION: Duration =
+    Duration::from_secs(AUTH_LIMITS.timeout.as_secs() + USAGE_LIMITS.timeout.as_secs());
+
 pub fn collect_claude(
     runner: &dyn CommandRunner,
     account: &Account,

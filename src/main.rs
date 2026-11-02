@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use agent_meter::app::{default_config_path, load_refresh_interval, system_jobs, App};
 use agent_meter::popup::render_popup_scrolled;
 use agent_meter::terminal::{run_in_terminal, CrosstermRawMode};
-use agent_meter::usage_cli::{parse_command, usage_report, Command};
+use agent_meter::usage_cli::{parse_command, usage_report, Command, DEFAULT_TIMEOUT};
 use chrono::Utc;
 use crossterm::event;
 use ratatui::backend::CrosstermBackend;
@@ -19,9 +19,6 @@ use ratatui::Terminal;
 const TICK: Duration = Duration::from_millis(200);
 /// A manual refresh may re-run an account this long after its last one ended.
 const MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(15);
-
-/// `usage --json` gives up after this long, so a script is never left hanging.
-const USAGE_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn main() -> ExitCode {
     // Herdr owns stdout, so every message goes to stderr.
@@ -49,7 +46,7 @@ fn start() -> Result<(), (u8, String)> {
     let config = config.unwrap_or_else(|| default_config_path(&home));
     if json {
         // The one command that writes to stdout: its JSON is the output.
-        let report = usage_report(&config, &home, system_jobs(), USAGE_TIMEOUT)
+        let report = usage_report(&config, &home, system_jobs(), DEFAULT_TIMEOUT)
             .map_err(|e| (e.exit_code(), e.to_string()))?;
         println!("{report}");
         return Ok(());

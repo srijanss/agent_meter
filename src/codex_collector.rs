@@ -17,6 +17,9 @@ use crate::snapshot::Snapshot;
 
 /// Per-reply wait.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// The longest a collection can run: each of the two replies timing out.
+pub const MAX_COLLECTION: Duration = Duration::from_secs(2 * REPLY_TIMEOUT.as_secs());
 /// Notifications and noise tolerated while waiting for one reply.
 const MAX_LINES_PER_REPLY: usize = 64;
 
