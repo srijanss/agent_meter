@@ -124,9 +124,14 @@ const HISTORY_QUEUE: usize = 8;
 /// Records snapshots on its own thread, so a slow or locked history file never
 /// stalls the popup. Failures come back through `failures`.
 struct HistoryWriter {
-    batches: SyncSender<Vec<Snapshot>>,
+    /// Dropped first on shutdown so the worker drains what it accepted and ends.
+    batches: Option<SyncSender<Vec<Snapshot>>>,
+    /// Disconnects when the worker ends, which is how shutdown knows it is done.
     results: Receiver<bool>,
 }
+
+/// The longest closing the popup waits for accepted history to be written.
+const HISTORY_FLUSH_LIMIT: Duration = Duration::from_secs(2);
 
 impl HistoryWriter {
     fn start(store: HistoryStore) -> Self {
@@ -134,24 +139,37 @@ impl HistoryWriter {
         let (done, results) = mpsc::channel();
         let spawned = thread::Builder::new().name("history".into()).spawn(move || {
             for batch in queued {
-                if done.send(store.record_all(&batch).is_ok()).is_err() {
-                    break;
-                }
+                // Keep writing even when nobody listens for the outcome any more.
+                let _ = done.send(store.record_all(&batch).is_ok());
             }
         });
         // Without a thread nothing is ever recorded; `submit` then reports it.
         drop(spawned);
-        Self { batches, results }
+        Self { batches: Some(batches), results }
     }
 
     /// Queues `snapshots` and returns at once; false if they could not be queued.
     fn submit(&self, snapshots: Vec<Snapshot>) -> bool {
-        snapshots.is_empty() || self.batches.try_send(snapshots).is_ok()
+        snapshots.is_empty() || self.batches.as_ref().is_some_and(|b| b.try_send(snapshots).is_ok())
     }
 
     /// Whether any recording finished with an error since the last call.
     fn failures(&self) -> bool {
         self.results.try_iter().any(|ok| !ok)
+    }
+}
+
+impl Drop for HistoryWriter {
+    /// Gives the worker a bounded time to write what it accepted, so closing
+    /// the popup does not lose displayed snapshots, nor hang on a locked file.
+    fn drop(&mut self) {
+        self.batches = None;
+        let deadline = Instant::now() + HISTORY_FLUSH_LIMIT;
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            if let Err(mpsc::RecvTimeoutError::Disconnected) = self.results.recv_timeout(left) {
+                return;
+            }
+        }
     }
 }
 

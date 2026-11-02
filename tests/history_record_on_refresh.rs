@@ -176,3 +176,32 @@ fn a_busy_history_file_never_holds_up_polling_or_the_data_shown() {
     wait_until(&mut app, Instant::now(), |_| store.load().len() == 2);
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn closing_the_app_flushes_accepted_history_without_waiting_forever() {
+    let dir = dir("flush");
+    let history = dir.join("h.jsonl");
+    let cfg = config(&dir, &format!("[history]\npath = \"{}\"\n", history.display()));
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("h.jsonl.lock"))
+        .unwrap();
+    lock.lock().unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        lock.unlock().unwrap();
+    });
+
+    let now = Instant::now();
+    let mut app = App::new(cfg, Path::new("/home/u"), ok_jobs(), Duration::from_secs(1)).unwrap();
+    app.refresh(now);
+    settle(&mut app, now);
+    drop(app);
+
+    // Dropping the app waited for the accepted records to reach the file.
+    assert_eq!(HistoryStore::new(history, 100).load().len(), 2);
+    release.join().unwrap();
+    let _ = fs::remove_dir_all(&dir);
+}
