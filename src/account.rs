@@ -49,6 +49,12 @@ impl fmt::Display for ConfigError {
     }
 }
 
+impl ConfigError {
+    pub(crate) fn new(message: &str) -> Self {
+        Self(message.into())
+    }
+}
+
 impl std::error::Error for ConfigError {}
 
 #[derive(Deserialize)]
@@ -65,7 +71,7 @@ struct RawConfig {
     accounts: BTreeMap<String, RawAccount>,
 }
 
-fn is_clean(s: &str) -> bool {
+pub(crate) fn is_clean(s: &str) -> bool {
     !s.trim().is_empty() && !s.chars().any(char::is_control)
 }
 
