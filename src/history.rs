@@ -6,7 +6,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Datelike, NaiveDate, TimeZone, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 
+use crate::account::{is_clean, ConfigError};
 use crate::snapshot::{Snapshot, Source};
 
 /// One window's usage at the time of a snapshot.
@@ -54,6 +55,63 @@ impl HistoryRecord {
                 .collect(),
         }
     }
+}
+
+/// Records kept when the config does not say otherwise.
+pub const DEFAULT_MAX_RECORDS: usize = 1000;
+const MAX_RECORDS_LIMIT: i64 = 1_000_000;
+
+/// The optional `[history]` table: where the log lives and how much it keeps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryConfig {
+    pub path: PathBuf,
+    pub max_records: usize,
+}
+
+impl HistoryConfig {
+    pub fn store(&self) -> HistoryStore {
+        HistoryStore::new(self.path.clone(), self.max_records)
+    }
+}
+
+/// Reads the `[history]` table. No table means history is off (`None`).
+/// `path` must be absolute or start with `~/`. Errors never echo config values.
+pub fn parse_history_config(
+    toml_text: &str,
+    user_home: &Path,
+) -> Result<Option<HistoryConfig>, ConfigError> {
+    let bad = |why: &str| ConfigError::new(&format!("invalid history config: {why}"));
+    let table: toml::Table =
+        toml::from_str(toml_text).map_err(|_| bad("config is not valid TOML"))?;
+    let Some(value) = table.get("history") else {
+        return Ok(None);
+    };
+    let section = value.as_table().ok_or_else(|| bad("history must be a table"))?;
+    if section.keys().any(|k| k != "path" && k != "max_records") {
+        return Err(bad("only path and max_records are allowed"));
+    }
+    let raw = section
+        .get("path")
+        .and_then(toml::Value::as_str)
+        .filter(|p| is_clean(p))
+        .ok_or_else(|| bad("path must be a non-blank string without control characters"))?;
+    let path = match raw.strip_prefix("~/") {
+        Some(rest) if !rest.is_empty() => user_home.join(rest),
+        _ if Path::new(raw).is_absolute() => PathBuf::from(raw),
+        _ => return Err(bad("path must be absolute or start with ~/")),
+    };
+    let max_records = match section.get("max_records") {
+        None => DEFAULT_MAX_RECORDS,
+        Some(v) => match v.as_integer() {
+            Some(n) if (1..=MAX_RECORDS_LIMIT).contains(&n) => n as usize,
+            _ => {
+                return Err(bad(&format!(
+                    "max_records must be a whole number from 1 to {MAX_RECORDS_LIMIT}"
+                )))
+            }
+        },
+    };
+    Ok(Some(HistoryConfig { path, max_records }))
 }
 
 /// A JSON-lines file holding at most `max_records` of the newest records.
