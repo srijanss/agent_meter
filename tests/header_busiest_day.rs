@@ -74,3 +74,28 @@ fn the_header_shows_the_busiest_day_only_when_known_and_when_it_fits() {
     assert!(!narrow.contains("BUSIEST"), "{narrow:?}");
     assert!(narrow.contains("Agents") && narrow.contains('×'), "{narrow:?}");
 }
+
+#[test]
+fn a_day_counts_once_by_its_peak_and_dates_of_one_weekday_add_up() {
+    // Repeated snapshots on one day do not pile up: Mon peaks at 40, not 3 x 40.
+    // Tue (two separate dates, 30 + 30 = 60) beats Mon (one day, 40).
+    let records = [
+        record("2026-10-12T08:00:00Z", 40.0),
+        record("2026-10-12T09:00:00Z", 40.0),
+        record("2026-10-12T10:00:00Z", 40.0),
+        record("2026-10-13T09:00:00Z", 30.0),
+        record("2026-10-20T09:00:00Z", 30.0),
+    ];
+    assert_eq!(busiest_day(&records, &Utc), Some(Weekday::Tue));
+
+    // Equal positive totals go to the earlier weekday, Monday first.
+    let tied = [record("2026-10-14T09:00:00Z", 20.0), record("2026-10-12T09:00:00Z", 20.0)];
+    assert_eq!(busiest_day(&tied, &Utc), Some(Weekday::Mon));
+
+    // Records with no windows or no usage figure are harmless.
+    let mut empty = record("2026-10-15T09:00:00Z", 90.0);
+    empty.windows.clear();
+    let mut unknown = record("2026-10-16T09:00:00Z", 90.0);
+    unknown.windows[0].used_percent = None;
+    assert_eq!(busiest_day(&[empty, unknown, record("2026-10-17T09:00:00Z", 5.0)], &Utc), Some(Weekday::Sat));
+}
