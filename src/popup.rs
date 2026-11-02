@@ -1,16 +1,20 @@
 //! The Herdr popup: a pure render of account snapshots into a ratatui frame.
 
-use chrono::{DateTime, Utc};
-use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use chrono::{DateTime, Duration, Utc};
+use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::account::{Account, Provider};
 use crate::countdown::ResetDisplay;
 use crate::display::{account_view, bonus_label, AccountView};
 use crate::snapshot::Snapshot;
+use crate::tooltip::window_tooltip;
+
+/// A tooltip notes how old the data is once it is older than this.
+const STALE_AFTER: Duration = Duration::minutes(30);
 
 /// Border and button accent.
 const ACCENT: Color = Color::Rgb(232, 163, 23);
@@ -35,13 +39,84 @@ pub fn render_popup_with(
     now: DateTime<Utc>,
     refreshing: bool,
 ) {
+    render_popup_hover(frame, entries, now, refreshing, None);
+}
+
+/// Like `render_popup_with`; while the pointer `hover`s over a usage window
+/// row, a tooltip describing that window is drawn next to it.
+pub fn render_popup_hover(
+    frame: &mut Frame,
+    entries: &[AccountEntry],
+    now: DateTime<Utc>,
+    refreshing: bool,
+    hover: Option<Position>,
+) {
+    render_popup_status(frame, entries, now, refreshing, hover, None);
+}
+
+/// Like `render_popup_hover`; a `notice` (such as a failed account switch) is
+/// shown as the popup's bottom row, inside the border.
+pub fn render_popup_status(
+    frame: &mut Frame,
+    entries: &[AccountEntry],
+    now: DateTime<Utc>,
+    refreshing: bool,
+    hover: Option<Position>,
+    notice: Option<&str>,
+) {
     let block = Block::bordered().border_style(Style::new().fg(ACCENT));
     frame.render_widget(block, frame.area());
 
-    let [header, divider, body] = regions(frame.area());
+    let [header, divider, mut body] = regions(frame.area());
     render_header(frame, header, refreshing);
     render_divider(frame, divider);
-    render_body(frame, body, &body_rows(entries, now));
+    if let (Some(notice), true) = (notice, body.height > 0) {
+        let status = Rect::new(body.x, body.bottom() - 1, body.width, 1);
+        body.height -= 1;
+        render_notice(frame, status, notice);
+    }
+    let rows = body_rows(entries, now);
+    render_body(frame, body, &rows);
+    if let Some(at) = hover.filter(|at| body.contains(*at)) {
+        if let Some(BodyRow::Window { tip, .. }) = rows.get((at.y - body.y) as usize) {
+            render_tooltip(frame, at.y, body.x, tip);
+        }
+    }
+}
+
+/// One line of status text. Control characters are shown as spaces so a
+/// message can never move the cursor or restyle the terminal.
+fn render_notice(frame: &mut Frame, area: Rect, notice: &str) {
+    let text: String = notice.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let style = Style::new().fg(Color::Red);
+    frame.render_widget(Paragraph::new(Line::from(Span::styled(text, style))), area);
+}
+
+/// Draws `lines` in a bordered box below row `y` (above it when there is no
+/// room below), kept inside the frame.
+fn render_tooltip(frame: &mut Frame, y: u16, x: u16, lines: &[String]) {
+    let area = frame.area();
+    if lines.is_empty() {
+        return;
+    }
+    // Terminal columns, not characters: wide glyphs take two cells.
+    let text_width = lines.iter().map(|l| Line::from(l.as_str()).width()).max().unwrap_or(0);
+    let width = u16::try_from(text_width.saturating_add(2)).unwrap_or(u16::MAX).min(area.width);
+    let height = (lines.len() as u16).saturating_add(2).min(area.height);
+    let x = x.min(area.right().saturating_sub(width)).max(area.x);
+    let below = y.saturating_add(1);
+    let top = if below.saturating_add(height) <= area.bottom() {
+        below
+    } else {
+        y.saturating_sub(height).max(area.y)
+    };
+    let tip = Rect::new(x, top, width, height);
+    frame.render_widget(Clear, tip);
+    let text: Vec<Line> = lines.iter().map(|l| Line::from(l.as_str())).collect();
+    frame.render_widget(
+        Paragraph::new(text).block(Block::bordered().border_style(Style::new().fg(ACCENT))),
+        tip,
+    );
 }
 
 /// Header, divider and body areas inside the popup border. Shared by drawing
@@ -90,7 +165,7 @@ enum BodyRow {
     /// An account heading; `use_for` names the account when the row offers a Use link.
     Account { left: Line<'static>, right: Line<'static>, use_for: Option<String> },
     /// A usage window: title, meter, and time left.
-    Window { title: String, fill: Option<f64>, scoped: Vec<f64>, time_left: String },
+    Window { title: String, fill: Option<f64>, scoped: Vec<f64>, time_left: String, tip: Vec<String> },
     Blank,
     Rule,
 }
@@ -150,7 +225,9 @@ fn window_rows(entry: &AccountEntry, now: DateTime<Utc>) -> Vec<BodyRow> {
     let mut body: Vec<BodyRow> = match account_view(snapshot, now) {
         AccountView::Rows(rows) => rows
             .into_iter()
-            .map(|row| BodyRow::Window {
+            .enumerate()
+            .map(|(index, row)| BodyRow::Window {
+                tip: window_tooltip(snapshot, index, now, STALE_AFTER).unwrap_or_default(),
                 title: row.label,
                 fill: row.fill,
                 scoped: row.scoped,
@@ -236,7 +313,7 @@ fn render_body(frame: &mut Frame, area: Rect, rows: &[BodyRow]) {
                 frame.render_widget(Paragraph::new(left.clone()), left_area);
                 frame.render_widget(Paragraph::new(right.clone()), right_area);
             }
-            BodyRow::Window { title, fill, scoped, time_left } => {
+            BodyRow::Window { title, fill, scoped, time_left, .. } => {
                 let [title_area, _, meter_area, _, time_area] = Layout::horizontal([
                     Constraint::Length(TITLE_WIDTH),
                     Constraint::Length(1),

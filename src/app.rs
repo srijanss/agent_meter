@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use crossterm::event::Event;
-use ratatui::layout::Rect;
+use crossterm::event::{Event, MouseEvent, MouseEventKind};
+use ratatui::layout::{Position, Rect};
 
 use crate::account::{mark_active, parse_accounts, Account, Provider};
 use crate::claude_collector::collect_claude;
@@ -43,6 +43,9 @@ impl fmt::Display for AppError {
 }
 
 impl std::error::Error for AppError {}
+
+/// Shown when choosing an account fails; the cause stays out of the popup.
+const SWITCH_FAILED: &str = "Could not switch account; check the config file";
 
 pub const USAGE: &str = "usage: herdr-agents [--config PATH]";
 
@@ -103,6 +106,8 @@ pub struct App {
     gate: RefreshGate,
     collections: Collections,
     jobs: JobFactory,
+    hover: Option<Position>,
+    notice: Option<String>,
     quit: bool,
 }
 
@@ -126,6 +131,8 @@ impl App {
             gate: RefreshGate::new(min_refresh_interval),
             collections: Collections::new(),
             jobs,
+            hover: None,
+            notice: None,
             quit: false,
         })
     }
@@ -136,6 +143,17 @@ impl App {
 
     pub fn refreshing(&self) -> bool {
         self.gate.any_in_flight()
+    }
+
+    /// Where the pointer last was inside the popup, if it still is.
+    pub fn hover(&self) -> Option<Position> {
+        self.hover
+    }
+
+    /// A message about the last action that failed, shown until the next
+    /// action. Fixed text: it never carries config values or paths.
+    pub fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
     }
 
     pub fn should_quit(&self) -> bool {
@@ -176,10 +194,23 @@ impl App {
         now_utc: DateTime<Utc>,
         now: Instant,
     ) -> Result<(), AppError> {
-        match action_in(event, area, &self.entries, now_utc) {
+        if let Event::Mouse(MouseEvent { kind: MouseEventKind::Moved, column, row, .. }) = event {
+            let at = Position::new(*column, *row);
+            self.hover = area.contains(at).then_some(at);
+        }
+        let action = action_in(event, area, &self.entries, now_utc);
+        if action.is_some() {
+            self.notice = None;
+        }
+        match action {
             Some(Action::Close) => self.quit = true,
             Some(Action::Refresh) => self.refresh(now),
-            Some(Action::Use(name)) => self.use_account(&name)?,
+            Some(Action::Use(name)) => {
+                if let Err(error) = self.use_account(&name) {
+                    self.notice = Some(SWITCH_FAILED.to_string());
+                    return Err(error);
+                }
+            }
             None => {}
         }
         Ok(())

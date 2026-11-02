@@ -297,3 +297,30 @@ fn a_failed_account_switch_reports_an_error_and_keeps_every_account_and_its_data
     assert_eq!(app.entries().len(), 3);
     assert_eq!(used(&app, "claude-a"), Some(Some(42.0)));
 }
+
+fn mouse_moved(column: u16, row: u16) -> Event {
+    Event::Mouse(MouseEvent { kind: MouseEventKind::Moved, column, row, modifiers: KeyModifiers::NONE })
+}
+
+#[test]
+fn the_pointer_position_follows_mouse_moves_and_is_cleared_when_it_leaves() {
+    let dir = scratch("app_hover");
+    let path = config_in(&dir, CONFIG);
+    let script = Script::new(true);
+    let mut app = App::new(path, Path::new(HOME), script.factory(), Duration::from_secs(30)).unwrap();
+    let t0 = Instant::now();
+    assert_eq!(app.hover(), None);
+
+    app.handle(&mouse_moved(7, 5), AREA, now(), t0).unwrap();
+    assert_eq!(app.hover(), Some(ratatui::layout::Position::new(7, 5)));
+    app.handle(&mouse_moved(9, 6), AREA, now(), t0).unwrap();
+    assert_eq!(app.hover(), Some(ratatui::layout::Position::new(9, 6)));
+
+    // Moving outside the popup shows no tooltip; other events leave the hover alone.
+    app.handle(&key(KeyCode::Char('x')), AREA, now(), t0).unwrap();
+    assert_eq!(app.hover(), Some(ratatui::layout::Position::new(9, 6)));
+    app.handle(&mouse_moved(AREA.width, 0), AREA, now(), t0).unwrap();
+    assert_eq!(app.hover(), None);
+    app.handle(&mouse_moved(3, AREA.height + 4), AREA, now(), t0).unwrap();
+    assert_eq!(app.hover(), None);
+}

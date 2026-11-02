@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use agent_meter::app::{default_config_path, parse_args, system_jobs, App};
-use agent_meter::popup::render_popup_with;
+use agent_meter::popup::render_popup_status;
 use agent_meter::terminal::{run_in_terminal, CrosstermRawMode};
 use chrono::Utc;
 use crossterm::event;
@@ -56,14 +56,21 @@ fn event_loop<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     while !app.should_quit() {
         app.poll(Instant::now());
         terminal.draw(|frame| {
-            render_popup_with(frame, app.entries(), Utc::now(), app.refreshing());
+            render_popup_status(
+                frame,
+                app.entries(),
+                Utc::now(),
+                app.refreshing(),
+                app.hover(),
+                app.notice(),
+            );
         })?;
         if event::poll(TICK)? {
             let event = event::read()?;
             let size = terminal.size()?;
             let area = Rect::new(0, 0, size.width, size.height);
-            // Choosing an account can fail to rewrite the config; the popup
-            // keeps running with what it has.
+            // Choosing an account can fail to rewrite the config; the app
+            // keeps what it has and shows the failure in the popup's status row.
             let _ = app.handle(&event, area, Utc::now(), Instant::now());
         }
     }
