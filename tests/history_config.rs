@@ -51,3 +51,13 @@ fn the_history_table_does_not_disturb_the_other_config_readers() {
     assert_eq!(agent_meter::account::parse_accounts(text, Path::new(HOME)).unwrap().len(), 1);
     assert!(agent_meter::models::parse_model_profiles(text).unwrap().is_empty());
 }
+
+#[test]
+fn a_tilde_path_always_stays_under_the_home_directory() {
+    for (given, expected) in [("~//h.jsonl", "/home/u/h.jsonl"), ("~///a//h.jsonl", "/home/u/a//h.jsonl")] {
+        let config = parse(&format!("[history]\npath = \"{given}\"\n")).unwrap().unwrap();
+        assert_eq!(config.path, PathBuf::from(expected), "{given}");
+    }
+    assert!(parse("[history]\npath = \"~/\"\n").is_err());
+    assert!(parse("[history]\npath = \"~//\"\n").is_err());
+}

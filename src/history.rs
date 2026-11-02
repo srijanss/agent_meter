@@ -96,7 +96,12 @@ pub fn parse_history_config(
         .filter(|p| is_clean(p))
         .ok_or_else(|| bad("path must be a non-blank string without control characters"))?;
     let path = match raw.strip_prefix("~/") {
-        Some(rest) if !rest.is_empty() => user_home.join(rest),
+        // Extra leading slashes must not turn the suffix absolute, which
+        // would make `join` discard the home directory.
+        Some(rest) => match rest.trim_start_matches('/') {
+            "" => return Err(bad("path must name a file under ~/")),
+            relative => user_home.join(relative),
+        },
         _ if Path::new(raw).is_absolute() => PathBuf::from(raw),
         _ => return Err(bad("path must be absolute or start with ~/")),
     };
