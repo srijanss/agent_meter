@@ -326,8 +326,10 @@ pub fn use_links_scrolled(
 ) -> Vec<UseLink> {
     let body = regions(area)[2];
     let width = USE_LABEL.len() as u16;
-    body_rows(entries, now)
-        .iter()
+    let rows = body_rows(entries, now);
+    // Drawing clamps an offset past the end, so hit-testing must too.
+    let scroll = scroll.min(rows.len().saturating_sub(body.height as usize));
+    rows.iter()
         .skip(scroll)
         .take(body.height as usize)
         .enumerate()
