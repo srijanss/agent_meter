@@ -83,6 +83,22 @@ pub fn render_popup_scrolled(
     draw_popup(frame, entries, now, refreshing, hover, notice, scroll, None);
 }
 
+/// The whole popup from every input at once: refresh state, hover, notice,
+/// scroll and the `busiest` weekday for the header subtitle (`None` leaves it out).
+#[allow(clippy::too_many_arguments)]
+pub fn render_popup_full(
+    frame: &mut Frame,
+    entries: &[AccountEntry],
+    now: DateTime<Utc>,
+    refreshing: bool,
+    hover: Option<Position>,
+    notice: Option<&str>,
+    scroll: usize,
+    busiest: Option<Weekday>,
+) {
+    draw_popup(frame, entries, now, refreshing, hover, notice, scroll, busiest);
+}
+
 /// Like `render_popup`, with the header subtitle naming the `busiest` weekday
 /// of the local usage history. `None` leaves the subtitle out.
 pub fn render_popup_busiest(

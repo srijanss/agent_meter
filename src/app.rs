@@ -12,7 +12,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc, Weekday};
 use crossterm::event::{Event, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
 
@@ -22,7 +22,7 @@ use crate::claude_collector::collect_claude;
 use crate::codex_collector::collect_codex;
 use crate::collection::Collections;
 use crate::failure::{AccountOutcome, CollectorError};
-use crate::history::{parse_history_config, HistoryStore};
+use crate::history::{busiest_day, parse_history_config, HistoryStore};
 use crate::input::{action_viewed, Action};
 use crate::popup::{max_scroll, AccountEntry};
 use crate::refresh::{accounts_to_refresh, RefreshGate};
@@ -122,12 +122,21 @@ pub fn system_jobs() -> JobFactory {
 const HISTORY_QUEUE: usize = 8;
 
 /// Records snapshots on its own thread, so a slow or locked history file never
-/// stalls the popup. Failures come back through `failures`.
+/// stalls the popup. Failures and the busiest weekday come back through `drain`.
 struct HistoryWriter {
     /// Dropped first on shutdown so the worker drains what it accepted and ends.
     batches: Option<SyncSender<Vec<Snapshot>>>,
     /// Disconnects when the worker ends, which is how shutdown knows it is done.
-    results: Receiver<bool>,
+    results: Receiver<WriteOutcome>,
+    /// The busiest weekday as last reported by the worker.
+    busiest: Option<Weekday>,
+}
+
+/// What the worker reports: whether a write worked, and the busiest weekday
+/// of the history afterwards.
+struct WriteOutcome {
+    ok: bool,
+    busiest: Option<Weekday>,
 }
 
 /// The longest closing the popup waits for accepted history to be written.
@@ -138,14 +147,17 @@ impl HistoryWriter {
         let (batches, queued) = mpsc::sync_channel::<Vec<Snapshot>>(HISTORY_QUEUE);
         let (done, results) = mpsc::channel();
         let spawned = thread::Builder::new().name("history".into()).spawn(move || {
+            let busiest = |store: &HistoryStore| busiest_day(&store.load(), &Local);
+            let _ = done.send(WriteOutcome { ok: true, busiest: busiest(&store) });
             for batch in queued {
                 // Keep writing even when nobody listens for the outcome any more.
-                let _ = done.send(store.record_all(&batch).is_ok());
+                let ok = store.record_all(&batch).is_ok();
+                let _ = done.send(WriteOutcome { ok, busiest: busiest(&store) });
             }
         });
         // Without a thread nothing is ever recorded; `submit` then reports it.
         drop(spawned);
-        Self { batches: Some(batches), results }
+        Self { batches: Some(batches), results, busiest: None }
     }
 
     /// Queues `snapshots` and returns at once; false if they could not be queued.
@@ -153,9 +165,14 @@ impl HistoryWriter {
         snapshots.is_empty() || self.batches.as_ref().is_some_and(|b| b.try_send(snapshots).is_ok())
     }
 
-    /// Whether any recording finished with an error since the last call.
-    fn failures(&self) -> bool {
-        self.results.try_iter().any(|ok| !ok)
+    /// Takes in the worker's reports; true if any recording failed since the last call.
+    fn drain(&mut self) -> bool {
+        let mut failed = false;
+        for outcome in self.results.try_iter() {
+            failed |= !outcome.ok;
+            self.busiest = outcome.busiest;
+        }
+        failed
     }
 }
 
@@ -247,6 +264,11 @@ impl App {
         self.notice.as_deref()
     }
 
+    /// The weekday with the most recorded usage, once the history has been read.
+    pub fn busiest_day(&self) -> Option<Weekday> {
+        self.history.as_ref().and_then(|h| h.busiest)
+    }
+
     /// Rows the content is scrolled down by; draw with this offset.
     pub fn scroll(&self) -> usize {
         self.scroll
@@ -303,8 +325,8 @@ impl App {
                 entry.snapshot = Some(snapshot);
             }
         }
-        if let Some(history) = &self.history {
-            if !history.submit(reported) || history.failures() {
+        if let Some(history) = &mut self.history {
+            if !history.submit(reported) || history.drain() {
                 self.notice = Some(HISTORY_FAILED.to_string());
             }
         }

@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use agent_meter::app::{default_config_path, load_refresh_interval, system_jobs, App};
-use agent_meter::popup::render_popup_scrolled;
+use agent_meter::popup::render_popup_full;
 use agent_meter::terminal::{run_in_terminal, CrosstermRawMode};
 use agent_meter::usage_cli::{parse_command, usage_report, Command, DEFAULT_TIMEOUT};
 use chrono::Utc;
@@ -72,7 +72,7 @@ fn event_loop<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
         app.poll(Instant::now());
         app.tick(Instant::now());
         terminal.draw(|frame| {
-            render_popup_scrolled(
+            render_popup_full(
                 frame,
                 app.entries(),
                 Utc::now(),
@@ -80,6 +80,7 @@ fn event_loop<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
                 app.hover(),
                 app.notice(),
                 app.scroll(),
+                app.busiest_day(),
             );
         })?;
         if event::poll(TICK)? {
