@@ -14,7 +14,8 @@ use chrono::{DateTime, Utc};
 use crossterm::event::{Event, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
 
-use crate::account::{mark_active, parse_accounts, Account, Provider};
+use crate::backoff::Backoff;
+use crate::account::{mark_active, parse_accounts, parse_refresh_interval, Account, Provider};
 use crate::claude_collector::collect_claude;
 use crate::codex_collector::collect_codex;
 use crate::collection::Collections;
@@ -66,7 +67,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<PathB
     }
 }
 
-pub fn load_accounts(path: &Path, user_home: &Path) -> Result<Vec<Account>, AppError> {
+fn read_config(path: &Path) -> Result<String, AppError> {
     let cannot_read = || AppError::new(format!("cannot read config at {}", path.display()));
     let mut text = String::new();
     File::open(path)
@@ -75,6 +76,16 @@ pub fn load_accounts(path: &Path, user_home: &Path) -> Result<Vec<Account>, AppE
     if text.len() as u64 > MAX_CONFIG_BYTES {
         return Err(AppError::new("config is too large"));
     }
+    Ok(text)
+}
+
+/// How often the popup refreshes on its own, from the config file.
+pub fn load_refresh_interval(path: &Path) -> Result<Duration, AppError> {
+    parse_refresh_interval(&read_config(path)?).map_err(|e| AppError::new(e.to_string()))
+}
+
+pub fn load_accounts(path: &Path, user_home: &Path) -> Result<Vec<Account>, AppError> {
+    let text = read_config(path)?;
     let accounts = parse_accounts(&text, user_home).map_err(|e| AppError::new(e.to_string()))?;
     if accounts.is_empty() {
         return Err(AppError::new("config has no accounts; add an [accounts.<name>] table"));
@@ -109,6 +120,7 @@ pub struct App {
     hover: Option<Position>,
     notice: Option<String>,
     scroll: usize,
+    auto_refresh: Option<Backoff>,
     quit: bool,
 }
 
@@ -135,8 +147,16 @@ impl App {
             hover: None,
             notice: None,
             scroll: 0,
+            auto_refresh: None,
             quit: false,
         })
+    }
+
+    /// Turns on automatic refreshing every `interval`, lengthening the wait
+    /// after each consecutive failure of an account. See `tick`.
+    pub fn with_auto_refresh(mut self, interval: Duration) -> Self {
+        self.auto_refresh = Some(Backoff::new(interval));
+        self
     }
 
     pub fn entries(&self) -> &[AccountEntry] {
@@ -171,7 +191,12 @@ impl App {
     /// recently finished. Returns at once; results arrive through `poll`.
     pub fn refresh(&mut self, now: Instant) {
         let names: Vec<String> = self.entries.iter().map(|e| e.account.name.clone()).collect();
-        for name in accounts_to_refresh(&mut self.gate, &names, now) {
+        let started = accounts_to_refresh(&mut self.gate, &names, now);
+        self.start(started);
+    }
+
+    fn start(&mut self, names: Vec<String>) {
+        for name in names {
             if let Some(entry) = self.entries.iter().find(|e| e.account.name == name) {
                 let job = (self.jobs)(&entry.account);
                 self.collections.spawn(name, job);
@@ -179,11 +204,28 @@ impl App {
         }
     }
 
+    /// Starts a collection for each account whose automatic refresh is due.
+    /// Does nothing unless `with_auto_refresh` was used.
+    pub fn tick(&mut self, now: Instant) {
+        let Some(backoff) = &self.auto_refresh else { return };
+        let due: Vec<String> = self
+            .entries
+            .iter()
+            .map(|e| e.account.name.clone())
+            .filter(|name| backoff.due(name, now))
+            .collect();
+        let started = accounts_to_refresh(&mut self.gate, &due, now);
+        self.start(started);
+    }
+
     /// Takes in finished collections. A failure leaves the account's last good
     /// data in place rather than clearing it.
     pub fn poll(&mut self, now: Instant) {
         for (name, outcome) in self.collections.poll() {
             self.gate.finish(&name, now);
+            if let Some(backoff) = &mut self.auto_refresh {
+                backoff.record(&name, matches!(outcome, AccountOutcome::Snapshot(_)), now);
+            }
             if let (AccountOutcome::Snapshot(snapshot), Some(entry)) =
                 (outcome, self.entries.iter_mut().find(|e| e.account.name == name))
             {

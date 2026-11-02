@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use agent_meter::app::{default_config_path, parse_args, system_jobs, App};
+use agent_meter::app::{default_config_path, load_refresh_interval, parse_args, system_jobs, App};
 use agent_meter::popup::render_popup_scrolled;
 use agent_meter::terminal::{run_in_terminal, CrosstermRawMode};
 use chrono::Utc;
@@ -39,7 +39,10 @@ fn start() -> Result<(), (u8, String)> {
         .map(PathBuf::from)
         .ok_or((2, "HOME is not set".to_string()))?;
     let config = config.unwrap_or_else(|| default_config_path(&home));
-    let mut app = App::new(config, &home, system_jobs(), MIN_REFRESH_INTERVAL).map_err(usage)?;
+    let interval = load_refresh_interval(&config).map_err(usage)?;
+    let mut app = App::new(config, &home, system_jobs(), MIN_REFRESH_INTERVAL)
+        .map_err(usage)?
+        .with_auto_refresh(interval);
 
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err((1, "must run in a terminal, as a Herdr popup".to_string()));
@@ -55,6 +58,7 @@ fn event_loop<W: Write>(app: &mut App, out: &mut W) -> io::Result<()> {
     app.refresh(Instant::now());
     while !app.should_quit() {
         app.poll(Instant::now());
+        app.tick(Instant::now());
         terminal.draw(|frame| {
             render_popup_scrolled(
                 frame,

@@ -69,6 +69,28 @@ fn is_clean(s: &str) -> bool {
     !s.trim().is_empty() && !s.chars().any(char::is_control)
 }
 
+/// How often usage refreshes on its own unless the config says otherwise.
+pub const DEFAULT_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+const MIN_INTERVAL_SECS: i64 = 15;
+const MAX_INTERVAL_SECS: i64 = 86_400;
+
+/// Reads the top-level `refresh_interval_secs` key (15 to 86400 seconds).
+pub fn parse_refresh_interval(toml_text: &str) -> Result<std::time::Duration, ConfigError> {
+    let table: toml::Table = toml::from_str(toml_text)
+        .map_err(|_| ConfigError("config is not valid TOML".into()))?;
+    let Some(value) = table.get("refresh_interval_secs") else {
+        return Ok(DEFAULT_REFRESH_INTERVAL);
+    };
+    match value.as_integer() {
+        Some(secs) if (MIN_INTERVAL_SECS..=MAX_INTERVAL_SECS).contains(&secs) => {
+            Ok(std::time::Duration::from_secs(secs as u64))
+        }
+        _ => Err(ConfigError(format!(
+            "refresh_interval_secs must be a whole number from {MIN_INTERVAL_SECS} to {MAX_INTERVAL_SECS}"
+        ))),
+    }
+}
+
 /// Parses `[accounts.<name>]` tables. `user_home` supplies the default dirs.
 pub fn parse_accounts(toml_text: &str, user_home: &Path) -> Result<Vec<Account>, ConfigError> {
     // The toml error text quotes source lines, so it is deliberately dropped.
